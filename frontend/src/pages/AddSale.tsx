@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Product, productsApi, salesApi } from '@/services/api';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -13,7 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, Loader2, CheckCircle2, AlertCircle, Package } from 'lucide-react';
+import { ArrowLeft, Loader2, CheckCircle2, AlertCircle, Package, Search, X } from 'lucide-react';
+import { cn } from '@/utils/cn';
 
 export default function AddSale() {
   const navigate = useNavigate();
@@ -22,6 +23,9 @@ export default function AddSale() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState<{ message: string; updatedStock: number } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   const [formData, setFormData] = useState({
     product_id: 0,
@@ -32,9 +36,39 @@ export default function AddSale() {
 
   const selectedProduct = products.find((p) => p.id === formData.product_id);
 
+  // Filter products based on search query
+  const filteredProducts = products.filter((product) =>
+    product.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   useEffect(() => {
     fetchProducts();
   }, []);
+
+  // Close search results when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSearchResults(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectProduct = (product: Product) => {
+    setFormData((prev) => ({ ...prev, product_id: product.id }));
+    setErrors((prev) => ({ ...prev, product_id: undefined }));
+    setSearchQuery(product.name);
+    setShowSearchResults(false);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setFormData((prev) => ({ ...prev, product_id: 0 }));
+    setShowSearchResults(false);
+  };
 
   const fetchProducts = async () => {
     try {
@@ -143,30 +177,72 @@ export default function AddSale() {
 
                 <div className="space-y-2">
                   <Label>Product</Label>
-                  <Select
-                    value={formData.product_id ? formData.product_id.toString() : ''}
-                    onValueChange={(value) => {
-                      setFormData((prev) => ({ ...prev, product_id: parseInt(value) }));
-                      setErrors((prev) => ({ ...prev, product_id: undefined }));
-                    }}
-                  >
-                    <SelectTrigger className={errors.product_id ? 'border-destructive' : ''}>
-                      <SelectValue placeholder="Select a product" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {products.map((product) => (
-                        <SelectItem key={product.id} value={product.id.toString()}>
-                          <div className="flex items-center gap-2">
-                            <Package className="h-4 w-4 text-muted-foreground" />
-                            <span>{product.name}</span>
-                            <span className="text-muted-foreground">
-                              ({product.stock} in stock)
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div ref={searchRef} className="relative">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        type="text"
+                        placeholder="Search and select a product..."
+                        value={searchQuery}
+                        onChange={(e) => {
+                          setSearchQuery(e.target.value);
+                          setShowSearchResults(true);
+                        }}
+                        onFocus={() => setShowSearchResults(true)}
+                        className={cn(
+                          "pl-9 pr-9",
+                          errors.product_id && "border-destructive"
+                        )}
+                      />
+                      {searchQuery && (
+                        <button
+                          type="button"
+                          onClick={clearSearch}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Search Results Dropdown */}
+                    {showSearchResults && searchQuery && (
+                      <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md">
+                        <div className="max-h-[300px] overflow-y-auto p-1">
+                          {filteredProducts.length === 0 ? (
+                            <div className="py-6 text-center text-sm text-muted-foreground">
+                              No products found
+                            </div>
+                          ) : (
+                            filteredProducts.map((product) => (
+                              <button
+                                key={product.id}
+                                type="button"
+                                onClick={() => selectProduct(product)}
+                                className={cn(
+                                  "w-full rounded-sm px-3 py-2 text-left transition-colors hover:bg-accent",
+                                  product.id === formData.product_id && "bg-accent"
+                                )}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Package className="h-4 w-4 text-muted-foreground" />
+                                    <span className="font-medium">{product.name}</span>
+                                  </div>
+                                  <span className={cn(
+                                    "text-sm",
+                                    product.stock <= product.min_stock ? "text-destructive font-medium" : "text-muted-foreground"
+                                  )}>
+                                    {product.stock} in stock
+                                  </span>
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   {errors.product_id && (
                     <p className="text-xs text-destructive">{errors.product_id}</p>
                   )}

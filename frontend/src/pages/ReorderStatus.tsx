@@ -77,12 +77,23 @@ export default function ReorderStatus() {
     fetchProducts();
   };
 
-  const requiresReorder = productData.filter(
-    (item) => item.reorderStatus?.reorder_required
-  );
-  const inStock = productData.filter(
-    (item) => item.reorderStatus && !item.reorderStatus.reorder_required
-  );
+  // Classify products by status
+  const statusGroups = {
+    OUT_OF_STOCK: productData.filter(i => i.reorderStatus?.status === 'OUT_OF_STOCK'),
+    CRITICAL: productData.filter(i => i.reorderStatus?.status === 'CRITICAL'),
+    LOW: productData.filter(i => i.reorderStatus?.status === 'LOW'),
+    OK: productData.filter(i => i.reorderStatus?.status === 'OK')
+  };
+  
+  const requiresReorder = [...statusGroups.OUT_OF_STOCK, ...statusGroups.CRITICAL];
+
+  // Section configuration
+  const sections = [
+    { key: 'OUT_OF_STOCK', title: 'Out of Stock', icon: AlertTriangle, color: 'text-destructive' },
+    { key: 'CRITICAL', title: 'Critical', icon: AlertTriangle, color: 'text-destructive' },
+    { key: 'LOW', title: 'Low Stock', icon: TrendingDown, color: 'text-yellow-600' },
+    { key: 'OK', title: 'Well Stocked', icon: CheckCircle2, color: 'text-success' }
+  ] as const;
 
   return (
     <AppLayout>
@@ -141,7 +152,7 @@ export default function ReorderStatus() {
               <CheckCircle2 className="h-4 w-4 text-success" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-success">{inStock.length}</div>
+              <div className="text-2xl font-bold text-success">{statusGroups.OK.length}</div>
             </CardContent>
           </Card>
         </div>
@@ -153,35 +164,23 @@ export default function ReorderStatus() {
           </div>
         )}
 
-        {/* Reorder Required Section */}
-        {!isLoadingProducts && requiresReorder.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="flex items-center gap-2 text-lg font-semibold text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Reorder Required
-            </h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {requiresReorder.map((item) => (
-                <ReorderCard key={item.product.id} data={item} />
-              ))}
+        {/* Status Sections */}
+        {!isLoadingProducts && sections.map(({ key, title, icon: Icon, color }) => {
+          const items = statusGroups[key];
+          return items.length > 0 ? (
+            <div key={key} className="space-y-3">
+              <h2 className={cn("flex items-center gap-2 text-lg font-semibold", color)}>
+                <Icon className="h-5 w-5" />
+                {title} ({items.length})
+              </h2>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {items.map((item) => (
+                  <ReorderCard key={item.product.id} data={item} />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Well Stocked Section */}
-        {!isLoadingProducts && inStock.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="flex items-center gap-2 text-lg font-semibold text-success">
-              <CheckCircle2 className="h-5 w-5" />
-              Well Stocked
-            </h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {inStock.map((item) => (
-                <ReorderCard key={item.product.id} data={item} />
-              ))}
-            </div>
-          </div>
-        )}
+          ) : null;
+        })}
 
         {/* Empty State */}
         {!isLoadingProducts && productData.length === 0 && (
@@ -199,12 +198,24 @@ export default function ReorderStatus() {
 
 function ReorderCard({ data }: { data: ProductReorderInfo }) {
   const { product, reorderStatus, isLoading, error } = data;
-  const needsReorder = reorderStatus?.reorder_required;
+  const status = reorderStatus?.status;
+  const needsReorder = status === 'CRITICAL' || status === 'OUT_OF_STOCK';
+
+  const getBadgeProps = () => {
+    const configs = {
+      OUT_OF_STOCK: { variant: 'destructive' as const, label: 'Out of Stock', className: '' },
+      CRITICAL: { variant: 'destructive' as const, label: 'Critical', className: '' },
+      LOW: { variant: 'default' as const, label: 'Low', className: 'bg-yellow-500 hover:bg-yellow-600' },
+      OK: { variant: 'secondary' as const, label: 'OK', className: '' }
+    };
+    return configs[status || 'OK'];
+  };
 
   return (
     <Card className={cn(
       "transition-colors",
-      needsReorder && "border-destructive/50 bg-destructive/5"
+      status === 'OUT_OF_STOCK' && "border-destructive bg-destructive/10",
+      needsReorder && status !== 'OUT_OF_STOCK' && "border-destructive/50 bg-destructive/5"
     )}>
       <CardContent className="p-4">
         {isLoading ? (
@@ -219,9 +230,7 @@ function ReorderCard({ data }: { data: ProductReorderInfo }) {
           <div className="space-y-3">
             <div className="flex items-start justify-between gap-2">
               <h3 className="font-medium leading-tight">{product.name}</h3>
-              <Badge variant={needsReorder ? 'destructive' : 'secondary'}>
-                {needsReorder ? 'Reorder' : 'OK'}
-              </Badge>
+              <Badge {...getBadgeProps()} />
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
@@ -229,11 +238,8 @@ function ReorderCard({ data }: { data: ProductReorderInfo }) {
                 <Package className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <p className="text-muted-foreground">Stock</p>
-                  <p className={cn(
-                    "font-medium",
-                    needsReorder && "text-destructive"
-                  )}>
-                    {reorderStatus?.current_stock ?? product.stock}
+                  <p className={cn("font-medium", needsReorder && "text-destructive")}>
+                    {reorderStatus?.stock ?? product.stock}
                   </p>
                 </div>
               </div>
@@ -257,7 +263,7 @@ function ReorderCard({ data }: { data: ProductReorderInfo }) {
 
             {needsReorder && reorderStatus && reorderStatus.average_daily_sales > 0 && (
               <div className="mt-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
-                Stock will run out in ~{Math.floor(reorderStatus.current_stock / reorderStatus.average_daily_sales)} days
+                Stock will run out in ~{Math.floor(reorderStatus.stock / reorderStatus.average_daily_sales)} days
               </div>
             )}
           </div>

@@ -1,11 +1,24 @@
 from flask import Blueprint, request, jsonify
 from database import get_db_connection
-from utils import calculate_reorder
+from utils import calculate_reorder, calculate_reorder_status
 from datetime import date
 from audit import log_audit
 from auth import generate_token, USERS, token_required, admin_required
+import csv
+import io
+from csv_upload import upload_csv_handler
 
 routes = Blueprint("routes", __name__)
+
+# Helper: Get product reorder info
+def get_product_reorder_info(cur, product_id, stock, min_stock, lead_time):
+    """Calculate reorder info for a product (DRY principle)"""
+    cur.execute("""
+        SELECT COALESCE(SUM(quantity), 0) FROM sales
+        WHERE product_id = %s AND sale_date >= CURRENT_DATE - INTERVAL '7 days'
+    """, (product_id,))
+    avg_sales = cur.fetchone()[0] / 7
+    return calculate_reorder_status(stock, min_stock, avg_sales, lead_time)
 
 # Login endpoint
 @routes.route("/login", methods=["POST"])
@@ -33,12 +46,13 @@ def login():
         "role": user["role"]
     })
 
-# Get all products with pagination
+# Get all products with pagination and search
 @routes.route("/products", methods=["GET"])
 @token_required
 def get_products():
     page = request.args.get("page", 1, type=int)
     limit = request.args.get("limit", 10, type=int)
+    search = request.args.get("search", "").strip()
     
     if page < 1:
         return jsonify({"error": "Page must be >= 1"}), 400
@@ -51,28 +65,40 @@ def get_products():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # Get total count
-    cur.execute("SELECT COUNT(*) FROM products")
+    # Build search query
+    where_clause = ""
+    params = []
+    
+    if search:
+        where_clause = "WHERE LOWER(name) LIKE LOWER(%s)"
+        params.append(f"%{search}%")
+    
+    # Get total count with search
+    count_query = f"SELECT COUNT(*) FROM products {where_clause}"
+    cur.execute(count_query, params)
     total = cur.fetchone()[0]
     
-    # Get paginated products
-    cur.execute("""
+    # Get paginated products with search
+    products_query = f"""
         SELECT id, name, stock, min_stock, lead_time, created_at, updated_at
         FROM products
+        {where_clause}
         ORDER BY id
         LIMIT %s OFFSET %s
-    """, (limit, offset))
+    """
+    cur.execute(products_query, params + [limit, offset])
     
     products = []
     for row in cur.fetchall():
+        product_id, name, stock, min_stock, lead_time = row[0], row[1], row[2], row[3], row[4]
+        reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
+        
         products.append({
-            "id": row[0],
-            "name": row[1],
-            "stock": row[2],
-            "min_stock": row[3],
-            "lead_time": row[4],
+            "id": product_id, "name": name, "stock": stock,
+            "min_stock": min_stock, "lead_time": lead_time,
             "created_at": row[5].isoformat() if row[5] else None,
-            "updated_at": row[6].isoformat() if row[6] else None
+            "updated_at": row[6].isoformat() if row[6] else None,
+            **reorder_info
         })
     
     cur.close()
@@ -126,6 +152,15 @@ def add_product():
     
     conn = get_db_connection()
     cur = conn.cursor()
+    
+    # Check for duplicate product (case-insensitive)
+    cur.execute("SELECT id FROM products WHERE LOWER(name) = LOWER(%s)", (name,))
+    existing = cur.fetchone()
+    
+    if existing:
+        cur.close()
+        conn.close()
+        return jsonify({"error": "Product with this name already exists"}), 409
 
     cur.execute(
         "INSERT INTO products (name, stock, min_stock, lead_time) VALUES (%s, %s, %s, %s) RETURNING id",
@@ -329,8 +364,7 @@ def reorder_check(product_id):
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Get stock and lead_time from database
-    cur.execute("SELECT stock, lead_time FROM products WHERE id = %s", (product_id,))
+    cur.execute("SELECT stock, min_stock, lead_time FROM products WHERE id = %s", (product_id,))
     result = cur.fetchone()
     
     if not result:
@@ -338,26 +372,87 @@ def reorder_check(product_id):
         conn.close()
         return jsonify({"error": "Product not found"}), 404
     
-    stock = result[0]
-    lead_time = result[1]
-
-    # Calculate avg daily sales (last 7 days)
-    cur.execute("""
-        SELECT COALESCE(SUM(quantity), 0) FROM sales
-        WHERE product_id = %s
-        AND sale_date >= CURRENT_DATE - INTERVAL '7 days'
-    """, (product_id,))
-    total_sales = cur.fetchone()[0]
-
-    avg_sales = total_sales / 7 if total_sales > 0 else 0
-
-    reorder_needed = calculate_reorder(avg_sales, lead_time, stock)
-
+    stock, min_stock, lead_time = result
+    reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
+    
     cur.close()
     conn.close()
 
     return jsonify({
-        "average_daily_sales": avg_sales,
-        "current_stock": stock,
-        "reorder_required": reorder_needed
+        "stock": stock, "min_stock": min_stock, "lead_time": lead_time,
+        "average_daily_sales": reorder_info["reorder_level"] / lead_time if lead_time > 0 else 0,
+        **reorder_info
     })
+
+# Reorder Reset - Replenish stock after supplier delivery
+@routes.route("/products/<int:product_id>/reorder-reset", methods=["POST"])
+@admin_required
+def reorder_reset(product_id):
+    data = request.json
+    
+    # Input validation
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+    
+    try:
+        new_stock = int(data["new_stock"])
+    except (KeyError, ValueError, TypeError):
+        return jsonify({"error": "new_stock must be a valid integer"}), 400
+    
+    if new_stock <= 0:
+        return jsonify({"error": "new_stock must be greater than 0"}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Check if product exists and get current stock
+        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
+        result = cur.fetchone()
+        
+        if not result:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Product not found"}), 404
+        
+        previous_stock = result[0]
+        
+        # Update stock to new value (not add, but replace)
+        cur.execute(
+            "UPDATE products SET stock = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (new_stock, product_id)
+        )
+        conn.commit()
+        
+        # Log audit
+        log_audit(
+            action="REORDER_RESET",
+            table_name="products",
+            record_id=product_id,
+            details={
+                "previous_stock": previous_stock,
+                "new_stock": new_stock,
+                "difference": new_stock - previous_stock
+            },
+            ip_address=request.remote_addr
+        )
+        
+        return jsonify({
+            "message": "Stock replenished successfully",
+            "previous_stock": previous_stock,
+            "current_stock": new_stock
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": "Transaction failed", "details": str(e)}), 500
+    
+    finally:
+        cur.close()
+        conn.close()
+
+# CSV Bulk Upload for Products
+@routes.route("/products/upload-csv", methods=["POST"])
+@admin_required
+def upload_csv():
+    return upload_csv_handler()

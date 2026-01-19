@@ -1,0 +1,66 @@
+name,stock,min_stock,lead_time
+Rice 25kg Bag,700,800,7
+Wheat Flour 10kg,550,600,5
+Sugar 1kg Pack,380,400,4
+Salt 1kg Pack,290,300,3
+Cooking Oil 5L,320,350,6
+Sunflower Oil 1L,650,700,5
+Groundnut Oil 1L,580,600,5
+Basmati Rice 5kg,390,400,7
+Toor Dal 1kg,280,300,6
+Moong Dal 1kg,240,250,6
+Chana Dal 1kg,290,300,6
+Urad Dal 1kg,190,200,6
+Tea Powder 500g,330,350,4
+Coffee Powder 200g,240,250,4
+Milk Packet 1L,1400,1500,1
+Curd Packet 500ml,850,900,1
+Butter 200g,380,400,2
+Cheese Block 500g,280,300,3
+Bread White,1150,1200,1
+Bread Brown,750,800,1
+Eggs Pack 12,580,600,1
+Chicken Whole 1kg,280,300,1
+Mutton Curry Cut 1kg,180,200,1
+Fish Rohu 1kg,240,250,1
+Apples 1kg,480,500,2
+Bananas 1 Dozen,980,1000,1
+Oranges 1kg,490,500,2
+Tomatoes 1kg,1180,1200,1
+Potatoes 1kg,1480,1500,1
+Onions 1kg,1380,1400,1
+Carrots 1kg,580,600,2
+Cabbage 1pc,480,500,2
+Cauliflower 1pc,480,500,2
+Green Peas 500g,330,350,2
+Spinach Bunch,390,400,1
+Capsicum 1kg,380,400,2
+Cucumber 1kg,430,450,2
+Detergent Powder 2kg,290,300,5
+Detergent Liquid 1L,240,250,5
+Dishwash Bar,480,500,5
+Dishwash Liquid 500ml,380,400,5
+Toilet Cleaner 1L,240,250,5
+Floor Cleaner 1L,190,200,5
+Handwash Liquid 250ml,680,700,4
+Bath Soap Bar,1180,1200,4
+Shampoo Sachet,1980,2000,4
+Shampoo Bottle 180ml,580,600,4
+Hair Oil 200ml,480,500,4
+Toothpaste 150g,780,800,4
+Toothbrush Medium,580,600,4
+Face Wash 100ml,330,350,4
+Body Lotion 200ml,280,300,4
+Notebook A4,880,900,10
+Pen Blue,2980,3000,10
+Pen Black,2480,2500,10
+Pencil HB,1980,2000,10
+Eraser Small,1480,1500,10
+Sharpener,1380,1400,10
+School Bag,140,150,12
+Water Bottle 1L,330,350,8
+Lunch Box,240,250,8
+LED Bulb 9W,380,400,6
+Extension Cord,180,200,7
+Mobile Charger,280,300,7
+Power Bank 10000mAh,140,150,10

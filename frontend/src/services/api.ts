@@ -80,6 +80,10 @@ export interface Product {
   lead_time: number;
   created_at: string;
   updated_at: string;
+  // Backend-calculated reorder status (single source of truth)
+  status: 'OK' | 'LOW' | 'CRITICAL' | 'OUT_OF_STOCK';
+  reorder_required: boolean; // True only for CRITICAL or OUT_OF_STOCK
+  reorder_level: number; // Demand-based reorder point
 }
 
 export interface PaginationInfo {
@@ -102,13 +106,46 @@ export interface CreateProductRequest {
 }
 
 export const productsApi = {
-  getAll: (page = 1, limit = 10) =>
-    apiRequest<ProductsResponse>(`/products?page=${page}&limit=${limit}`),
+  getAll: (page = 1, limit = 10, search = '') => {
+    const searchParam = search ? `&search=${encodeURIComponent(search)}` : '';
+    return apiRequest<ProductsResponse>(`/products?page=${page}&limit=${limit}${searchParam}`);
+  },
   create: (product: CreateProductRequest) =>
     apiRequest<{ message: string }>('/products', {
       method: 'POST',
       body: product,
     }),
+  reorderReset: (productId: number, newStock: number) =>
+    apiRequest<{ message: string; previous_stock: number; current_stock: number }>(
+      `/products/${productId}/reorder-reset`,
+      {
+        method: 'POST',
+        body: { new_stock: newStock },
+      }
+    ),
+  uploadCSV: async (file: File, mode: 'skip' | 'update_stock' = 'skip') => {
+    const token = localStorage.getItem('auth_token');
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/products/upload-csv?mode=${mode}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error: ApiError = {
+        message: response.statusText || 'Upload failed',
+        status: response.status,
+      };
+      throw error;
+    }
+
+    return response.json();
+  },
 };
 
 // Sales endpoints
@@ -161,9 +198,13 @@ export const salesApi = {
 
 // Reorder endpoints
 export interface ReorderStatus {
+  stock: number;
+  min_stock: number;
   average_daily_sales: number;
-  current_stock: number;
-  reorder_required: boolean;
+  lead_time: number;
+  status: 'OK' | 'LOW' | 'CRITICAL' | 'OUT_OF_STOCK';
+  reorder_required: boolean; // True only for CRITICAL or OUT_OF_STOCK
+  reorder_level: number; // Demand-based reorder point
 }
 
 export const reorderApi = {
