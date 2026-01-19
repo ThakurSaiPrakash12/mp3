@@ -211,3 +211,32 @@ export const reorderApi = {
   check: (productId: number) =>
     apiRequest<ReorderStatus>(`/reorder-check/${productId}`),
 };
+
+// Dashboard endpoints
+export interface DashboardData {
+  summary: {
+    total_products: number;
+    total_sales_last_7_days: number;
+    low_stock_items: number;
+    reorder_required_items: number;
+  };
+  sales_trend: Array<{
+    date: string;
+    quantity: number;
+  }>;
+  stock_distribution: {
+    well_stocked: number;
+    reorder_required: number;
+  };
+  stock_levels: Array<{
+    id: number;
+    name: string;
+    stock: number;
+    min_stock: number;
+    reorder_required: boolean;
+  }>;
+}
+
+export const dashboardApi = {
+  get: () => apiRequest<DashboardData>('/dashboard'),
+};

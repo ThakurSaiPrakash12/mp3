@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Product, Sale, productsApi, salesApi, reorderApi, ReorderStatus as ReorderStatusType } from '@/services/api';
+import { dashboardApi } from '@/services/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -28,40 +28,12 @@ import {
   ArrowRight,
   RefreshCw,
 } from 'lucide-react';
-import { format, subDays, parseISO } from 'date-fns';
 import { cn } from '@/utils/cn';
-
-interface DashboardStats {
-  totalProducts: number;
-  totalSales: number;
-  lowStockCount: number;
-  reorderRequired: number;
-}
-
-interface SalesTrend {
-  date: string;
-  sales: number;
-  quantity: number;
-}
-
-interface StockData {
-  name: string;
-  stock: number;
-  minStock: number;
-  isLow: boolean;
-}
 
 const COLORS = ['hsl(var(--success))', 'hsl(var(--destructive))'];
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalProducts: 0,
-    totalSales: 0,
-    lowStockCount: 0,
-    reorderRequired: 0,
-  });
-  const [salesTrend, setSalesTrend] = useState<SalesTrend[]>([]);
-  const [stockData, setStockData] = useState<StockData[]>([]);
+  const [dashboardData, setDashboardData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -72,71 +44,9 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     setIsLoading(true);
     setError('');
-
     try {
-      // Fetch products
-      const productsResponse = await productsApi.getAll(1, 100);
-      const products = productsResponse.products;
-
-      // Fetch sales
-      const salesResponse = await salesApi.getAll({ limit: 100 });
-      const sales = salesResponse.sales;
-
-      // Calculate low stock
-      const lowStock = products.filter((p) => p.stock <= p.min_stock);
-
-      // Check reorder status for low stock items
-      let reorderCount = 0;
-      for (const product of lowStock.slice(0, 10)) {
-        try {
-          const status = await reorderApi.check(product.id);
-          if (status.reorder_required) reorderCount++;
-        } catch {
-          // Skip failed checks
-        }
-      }
-
-      // Set stats
-      setStats({
-        totalProducts: productsResponse.pagination.total,
-        totalSales: salesResponse.pagination.total,
-        lowStockCount: lowStock.length,
-        reorderRequired: reorderCount,
-      });
-
-      // Process sales trend (last 7 days)
-      const trendMap = new Map<string, { sales: number; quantity: number }>();
-      for (let i = 6; i >= 0; i--) {
-        const date = format(subDays(new Date(), i), 'yyyy-MM-dd');
-        trendMap.set(date, { sales: 0, quantity: 0 });
-      }
-
-      sales.forEach((sale) => {
-        const saleDate = sale.sale_date.split('T')[0];
-        if (trendMap.has(saleDate)) {
-          const current = trendMap.get(saleDate)!;
-          trendMap.set(saleDate, {
-            sales: current.sales + 1,
-            quantity: current.quantity + sale.quantity,
-          });
-        }
-      });
-
-      const trendData: SalesTrend[] = Array.from(trendMap.entries()).map(([date, data]) => ({
-        date: format(parseISO(date), 'MMM d'),
-        sales: data.sales,
-        quantity: data.quantity,
-      }));
-      setSalesTrend(trendData);
-
-      // Process stock data (top 8 products)
-      const stockItems: StockData[] = products.slice(0, 8).map((p) => ({
-        name: p.name.length > 12 ? p.name.substring(0, 12) + '...' : p.name,
-        stock: p.stock,
-        minStock: p.min_stock,
-        isLow: p.stock <= p.min_stock,
-      }));
-      setStockData(stockItems);
+      const data = await dashboardApi.get();
+      setDashboardData(data);
     } catch (err) {
       setError('Failed to load dashboard data. Make sure the backend is running.');
       console.error('Dashboard fetch error:', err);
@@ -144,11 +54,6 @@ export default function Dashboard() {
       setIsLoading(false);
     }
   };
-
-  const pieData = [
-    { name: 'Well Stocked', value: stats.totalProducts - stats.lowStockCount },
-    { name: 'Low Stock', value: stats.lowStockCount },
-  ];
 
   if (isLoading) {
     return (
@@ -160,12 +65,12 @@ export default function Dashboard() {
     );
   }
 
-  if (error) {
+  if (error || !dashboardData) {
     return (
       <AppLayout>
         <div className="flex flex-col items-center justify-center py-24">
           <AlertTriangle className="h-12 w-12 text-destructive" />
-          <p className="mt-4 text-muted-foreground">{error}</p>
+          <p className="mt-4 text-muted-foreground">{error || 'No data available'}</p>
           <Button onClick={fetchDashboardData} className="mt-4">
             <RefreshCw className="mr-2 h-4 w-4" />
             Retry
@@ -174,6 +79,13 @@ export default function Dashboard() {
       </AppLayout>
     );
   }
+
+  const { summary, sales_trend, stock_distribution, stock_levels } = dashboardData;
+
+  const pieData = [
+    { name: 'Well Stocked', value: stock_distribution.well_stocked },
+    { name: 'Reorder Required', value: stock_distribution.reorder_required },
+  ];
 
   return (
     <AppLayout>
@@ -202,7 +114,7 @@ export default function Dashboard() {
               <Package className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{stats.totalProducts}</div>
+              <div className="text-2xl font-bold">{summary.total_products}</div>
               <Link
                 to="/products"
                 className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
@@ -220,7 +132,7 @@ export default function Dashboard() {
               <ShoppingCart className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{stats.totalSales}</div>
+              <div className="text-2xl font-bold">{summary.total_sales_last_7_days}</div>
               <Link
                 to="/sales"
                 className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
@@ -230,7 +142,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className={stats.lowStockCount > 0 ? 'border-warning/50' : ''}>
+          <Card className={summary.low_stock_items > 0 ? 'border-warning/50' : ''}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Low Stock Items
@@ -238,13 +150,13 @@ export default function Dashboard() {
               <AlertTriangle
                 className={cn(
                   'h-4 w-4',
-                  stats.lowStockCount > 0 ? 'text-warning' : 'text-muted-foreground'
+                  summary.low_stock_items > 0 ? 'text-warning' : 'text-muted-foreground'
                 )}
               />
             </CardHeader>
             <CardContent>
-              <div className={cn('text-2xl font-bold', stats.lowStockCount > 0 && 'text-warning')}>
-                {stats.lowStockCount}
+              <div className={cn('text-2xl font-bold', summary.low_stock_items > 0 && 'text-warning')}>
+                {summary.low_stock_items}
               </div>
               <Link
                 to="/reorder"
@@ -255,7 +167,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className={stats.reorderRequired > 0 ? 'border-destructive/50' : ''}>
+          <Card className={summary.reorder_required_items > 0 ? 'border-destructive/50' : ''}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Reorder Required
@@ -263,17 +175,17 @@ export default function Dashboard() {
               <TrendingUp
                 className={cn(
                   'h-4 w-4',
-                  stats.reorderRequired > 0 ? 'text-destructive' : 'text-muted-foreground'
+                  summary.reorder_required_items > 0 ? 'text-destructive' : 'text-muted-foreground'
                 )}
               />
             </CardHeader>
             <CardContent>
               <div
-                className={cn('text-2xl font-bold', stats.reorderRequired > 0 && 'text-destructive')}
+                className={cn('text-2xl font-bold', summary.reorder_required_items > 0 && 'text-destructive')}
               >
-                {stats.reorderRequired}
+                {summary.reorder_required_items}
               </div>
-              {stats.reorderRequired > 0 && (
+              {summary.reorder_required_items > 0 && (
                 <Badge variant="destructive" className="mt-1">
                   Action needed
                 </Badge>
@@ -293,7 +205,7 @@ export default function Dashboard() {
             <CardContent>
               <div className="h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={salesTrend}>
+                  <AreaChart data={sales_trend}>
                     <defs>
                       <linearGradient id="colorQuantity" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
@@ -344,7 +256,7 @@ export default function Dashboard() {
             <CardContent>
               <div className="h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stockData} layout="vertical">
+                  <BarChart data={stock_levels} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                     <XAxis type="number" tick={{ fontSize: 12 }} className="fill-muted-foreground" />
                     <YAxis
