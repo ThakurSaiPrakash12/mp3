@@ -3,11 +3,94 @@ from database import get_db_connection
 from utils import calculate_reorder
 from datetime import date
 from audit import log_audit
+from auth import generate_token, USERS, token_required, admin_required
 
 routes = Blueprint("routes", __name__)
 
+# Login endpoint
+@routes.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+    
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+    
+    user = USERS.get(username)
+    if not user or user["password"] != password:
+        return jsonify({"error": "Invalid credentials"}), 401
+    
+    token = generate_token(username, user["role"])
+    
+    return jsonify({
+        "token": token,
+        "username": username,
+        "role": user["role"]
+    })
+
+# Get all products with pagination
+@routes.route("/products", methods=["GET"])
+@token_required
+def get_products():
+    page = request.args.get("page", 1, type=int)
+    limit = request.args.get("limit", 10, type=int)
+    
+    if page < 1:
+        return jsonify({"error": "Page must be >= 1"}), 400
+    
+    if limit < 1 or limit > 100:
+        return jsonify({"error": "Limit must be between 1 and 100"}), 400
+    
+    offset = (page - 1) * limit
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Get total count
+    cur.execute("SELECT COUNT(*) FROM products")
+    total = cur.fetchone()[0]
+    
+    # Get paginated products
+    cur.execute("""
+        SELECT id, name, stock, min_stock, lead_time, created_at, updated_at
+        FROM products
+        ORDER BY id
+        LIMIT %s OFFSET %s
+    """, (limit, offset))
+    
+    products = []
+    for row in cur.fetchall():
+        products.append({
+            "id": row[0],
+            "name": row[1],
+            "stock": row[2],
+            "min_stock": row[3],
+            "lead_time": row[4],
+            "created_at": row[5].isoformat() if row[5] else None,
+            "updated_at": row[6].isoformat() if row[6] else None
+        })
+    
+    cur.close()
+    conn.close()
+    
+    return jsonify({
+        "products": products,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit
+        }
+    })
+
 #  Add Product
 @routes.route("/products", methods=["POST"])
+@admin_required
 def add_product():
     data = request.json
     
@@ -71,7 +154,92 @@ def add_product():
 
     return jsonify({"message": "Product added successfully"})
 
+# Get sales with filters
+@routes.route("/sales", methods=["GET"])
+@token_required
+def get_sales():
+    product_id = request.args.get("product_id", type=int)
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+    page = request.args.get("page", 1, type=int)
+    limit = request.args.get("limit", 10, type=int)
+    
+    if page < 1:
+        return jsonify({"error": "Page must be >= 1"}), 400
+    
+    if limit < 1 or limit > 100:
+        return jsonify({"error": "Limit must be between 1 and 100"}), 400
+    
+    offset = (page - 1) * limit
+    
+    # Build query dynamically
+    conditions = []
+    params = []
+    
+    if product_id:
+        conditions.append("s.product_id = %s")
+        params.append(product_id)
+    
+    if start_date:
+        conditions.append("s.sale_date >= %s")
+        params.append(start_date)
+    
+    if end_date:
+        conditions.append("s.sale_date <= %s")
+        params.append(end_date)
+    
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Get total count
+    count_query = f"SELECT COUNT(*) FROM sales s {where_clause}"
+    cur.execute(count_query, params)
+    total = cur.fetchone()[0]
+    
+    # Get paginated sales
+    sales_query = f"""
+        SELECT s.id, s.product_id, p.name, s.quantity, s.sale_date, s.created_at
+        FROM sales s
+        JOIN products p ON s.product_id = p.id
+        {where_clause}
+        ORDER BY s.sale_date DESC, s.id DESC
+        LIMIT %s OFFSET %s
+    """
+    cur.execute(sales_query, params + [limit, offset])
+    
+    sales = []
+    for row in cur.fetchall():
+        sales.append({
+            "id": row[0],
+            "product_id": row[1],
+            "product_name": row[2],
+            "quantity": row[3],
+            "sale_date": row[4].isoformat() if row[4] else None,
+            "created_at": row[5].isoformat() if row[5] else None
+        })
+    
+    cur.close()
+    conn.close()
+    
+    return jsonify({
+        "sales": sales,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit
+        },
+        "filters": {
+            "product_id": product_id,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+    })
+
 @routes.route("/sales", methods=["POST"])
+@admin_required
 def add_sale():
     data = request.json
     
@@ -154,7 +322,9 @@ def add_sale():
     finally:
         cur.close()
         conn.close()
+
 @routes.route("/reorder-check/<int:product_id>", methods=["GET"])
+@token_required
 def reorder_check(product_id):
     conn = get_db_connection()
     cur = conn.cursor()

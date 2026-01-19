@@ -1,0 +1,494 @@
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { Product, Sale, productsApi, salesApi, reorderApi, ReorderStatus as ReorderStatusType } from '@/services/api';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
+import {
+  Package,
+  ShoppingCart,
+  AlertTriangle,
+  TrendingUp,
+  Loader2,
+  ArrowRight,
+  RefreshCw,
+} from 'lucide-react';
+import { format, subDays, parseISO } from 'date-fns';
+import { cn } from '@/utils/cn';
+
+interface DashboardStats {
+  totalProducts: number;
+  totalSales: number;
+  lowStockCount: number;
+  reorderRequired: number;
+}
+
+interface SalesTrend {
+  date: string;
+  sales: number;
+  quantity: number;
+}
+
+interface StockData {
+  name: string;
+  stock: number;
+  minStock: number;
+  isLow: boolean;
+}
+
+const COLORS = ['hsl(var(--success))', 'hsl(var(--destructive))'];
+
+export default function Dashboard() {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalProducts: 0,
+    totalSales: 0,
+    lowStockCount: 0,
+    reorderRequired: 0,
+  });
+  const [salesTrend, setSalesTrend] = useState<SalesTrend[]>([]);
+  const [stockData, setStockData] = useState<StockData[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    setIsLoading(true);
+    setError('');
+
+    try {
+      // Fetch products
+      const productsResponse = await productsApi.getAll(1, 100);
+      const products = productsResponse.products;
+
+      // Fetch sales
+      const salesResponse = await salesApi.getAll({ limit: 100 });
+      const sales = salesResponse.sales;
+
+      // Calculate low stock
+      const lowStock = products.filter((p) => p.stock <= p.min_stock);
+
+      // Check reorder status for low stock items
+      let reorderCount = 0;
+      for (const product of lowStock.slice(0, 10)) {
+        try {
+          const status = await reorderApi.check(product.id);
+          if (status.reorder_required) reorderCount++;
+        } catch {
+          // Skip failed checks
+        }
+      }
+
+      // Set stats
+      setStats({
+        totalProducts: productsResponse.pagination.total,
+        totalSales: salesResponse.pagination.total,
+        lowStockCount: lowStock.length,
+        reorderRequired: reorderCount,
+      });
+
+      // Process sales trend (last 7 days)
+      const trendMap = new Map<string, { sales: number; quantity: number }>();
+      for (let i = 6; i >= 0; i--) {
+        const date = format(subDays(new Date(), i), 'yyyy-MM-dd');
+        trendMap.set(date, { sales: 0, quantity: 0 });
+      }
+
+      sales.forEach((sale) => {
+        const saleDate = sale.sale_date.split('T')[0];
+        if (trendMap.has(saleDate)) {
+          const current = trendMap.get(saleDate)!;
+          trendMap.set(saleDate, {
+            sales: current.sales + 1,
+            quantity: current.quantity + sale.quantity,
+          });
+        }
+      });
+
+      const trendData: SalesTrend[] = Array.from(trendMap.entries()).map(([date, data]) => ({
+        date: format(parseISO(date), 'MMM d'),
+        sales: data.sales,
+        quantity: data.quantity,
+      }));
+      setSalesTrend(trendData);
+
+      // Process stock data (top 8 products)
+      const stockItems: StockData[] = products.slice(0, 8).map((p) => ({
+        name: p.name.length > 12 ? p.name.substring(0, 12) + '...' : p.name,
+        stock: p.stock,
+        minStock: p.min_stock,
+        isLow: p.stock <= p.min_stock,
+      }));
+      setStockData(stockItems);
+    } catch (err) {
+      setError('Failed to load dashboard data. Make sure the backend is running.');
+      console.error('Dashboard fetch error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const pieData = [
+    { name: 'Well Stocked', value: stats.totalProducts - stats.lowStockCount },
+    { name: 'Low Stock', value: stats.lowStockCount },
+  ];
+
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center py-24">
+          <AlertTriangle className="h-12 w-12 text-destructive" />
+          <p className="mt-4 text-muted-foreground">{error}</p>
+          <Button onClick={fetchDashboardData} className="mt-4">
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Retry
+          </Button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  return (
+    <AppLayout>
+      <div className="animate-fade-in space-y-6">
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <p className="text-sm text-muted-foreground">
+              Overview of your inventory and sales performance
+            </p>
+          </div>
+          <Button variant="outline" onClick={fetchDashboardData}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Total Products
+              </CardTitle>
+              <Package className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.totalProducts}</div>
+              <Link
+                to="/products"
+                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
+              >
+                View all <ArrowRight className="ml-1 h-3 w-3" />
+              </Link>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Total Sales
+              </CardTitle>
+              <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.totalSales}</div>
+              <Link
+                to="/sales"
+                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
+              >
+                View all <ArrowRight className="ml-1 h-3 w-3" />
+              </Link>
+            </CardContent>
+          </Card>
+
+          <Card className={stats.lowStockCount > 0 ? 'border-warning/50' : ''}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Low Stock Items
+              </CardTitle>
+              <AlertTriangle
+                className={cn(
+                  'h-4 w-4',
+                  stats.lowStockCount > 0 ? 'text-warning' : 'text-muted-foreground'
+                )}
+              />
+            </CardHeader>
+            <CardContent>
+              <div className={cn('text-2xl font-bold', stats.lowStockCount > 0 && 'text-warning')}>
+                {stats.lowStockCount}
+              </div>
+              <Link
+                to="/reorder"
+                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
+              >
+                Check reorder <ArrowRight className="ml-1 h-3 w-3" />
+              </Link>
+            </CardContent>
+          </Card>
+
+          <Card className={stats.reorderRequired > 0 ? 'border-destructive/50' : ''}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Reorder Required
+              </CardTitle>
+              <TrendingUp
+                className={cn(
+                  'h-4 w-4',
+                  stats.reorderRequired > 0 ? 'text-destructive' : 'text-muted-foreground'
+                )}
+              />
+            </CardHeader>
+            <CardContent>
+              <div
+                className={cn('text-2xl font-bold', stats.reorderRequired > 0 && 'text-destructive')}
+              >
+                {stats.reorderRequired}
+              </div>
+              {stats.reorderRequired > 0 && (
+                <Badge variant="destructive" className="mt-1">
+                  Action needed
+                </Badge>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Charts Row */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Sales Trend Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Sales Trend</CardTitle>
+              <CardDescription>Quantity sold over the last 7 days</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={salesTrend}>
+                    <defs>
+                      <linearGradient id="colorQuantity" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={false}
+                      className="fill-muted-foreground"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={false}
+                      className="fill-muted-foreground"
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'hsl(var(--card))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '8px',
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="quantity"
+                      stroke="hsl(var(--primary))"
+                      fillOpacity={1}
+                      fill="url(#colorQuantity)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Stock Levels Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Stock Levels</CardTitle>
+              <CardDescription>Current stock vs minimum threshold</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={stockData} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis type="number" tick={{ fontSize: 12 }} className="fill-muted-foreground" />
+                    <YAxis
+                      dataKey="name"
+                      type="category"
+                      tick={{ fontSize: 11 }}
+                      width={80}
+                      className="fill-muted-foreground"
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'hsl(var(--card))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '8px',
+                      }}
+                    />
+                    <Bar
+                      dataKey="stock"
+                      fill="hsl(var(--primary))"
+                      radius={[0, 4, 4, 0]}
+                      name="Current Stock"
+                    />
+                    <Bar
+                      dataKey="minStock"
+                      fill="hsl(var(--muted-foreground))"
+                      radius={[0, 4, 4, 0]}
+                      opacity={0.4}
+                      name="Min Stock"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Bottom Row */}
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Stock Distribution Pie Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Stock Distribution</CardTitle>
+              <CardDescription>Healthy vs low stock ratio</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[200px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {pieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'hsl(var(--card))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: '8px',
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="mt-4 flex justify-center gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="h-3 w-3 rounded-full bg-success" />
+                  <span className="text-sm text-muted-foreground">Well Stocked</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-3 w-3 rounded-full bg-destructive" />
+                  <span className="text-sm text-muted-foreground">Low Stock</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Quick Actions */}
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>Common tasks and shortcuts</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Button asChild variant="outline" className="h-auto justify-start p-4">
+                  <Link to="/products/add">
+                    <Package className="mr-3 h-5 w-5 text-primary" />
+                    <div className="text-left">
+                      <div className="font-medium">Add Product</div>
+                      <div className="text-xs text-muted-foreground">
+                        Add new items to inventory
+                      </div>
+                    </div>
+                  </Link>
+                </Button>
+
+                <Button asChild variant="outline" className="h-auto justify-start p-4">
+                  <Link to="/sales/add">
+                    <ShoppingCart className="mr-3 h-5 w-5 text-primary" />
+                    <div className="text-left">
+                      <div className="font-medium">Record Sale</div>
+                      <div className="text-xs text-muted-foreground">
+                        Log a new sale transaction
+                      </div>
+                    </div>
+                  </Link>
+                </Button>
+
+                <Button asChild variant="outline" className="h-auto justify-start p-4">
+                  <Link to="/reorder">
+                    <AlertTriangle className="mr-3 h-5 w-5 text-warning" />
+                    <div className="text-left">
+                      <div className="font-medium">Check Reorder</div>
+                      <div className="text-xs text-muted-foreground">
+                        View items needing restock
+                      </div>
+                    </div>
+                  </Link>
+                </Button>
+
+                <Button asChild variant="outline" className="h-auto justify-start p-4">
+                  <Link to="/products">
+                    <TrendingUp className="mr-3 h-5 w-5 text-success" />
+                    <div className="text-left">
+                      <div className="font-medium">View Inventory</div>
+                      <div className="text-xs text-muted-foreground">
+                        Browse all products
+                      </div>
+                    </div>
+                  </Link>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </AppLayout>
+  );
+}
