@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi } from '@/services/api';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,6 +37,14 @@ export default function Dashboard() {
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // WebSocket for real-time updates
+  const { isConnected } = useWebSocket({
+    onProductAdded: () => fetchDashboardData(),
+    onStockUpdated: () => fetchDashboardData(),
+    onSaleRecorded: () => fetchDashboardData(),
+    onProductsImported: () => fetchDashboardData(),
+  });
 
   useEffect(() => {
     fetchDashboardData();
@@ -93,7 +102,22 @@ export default function Dashboard() {
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+              <Badge 
+                variant={isConnected ? "default" : "secondary"} 
+                className={cn(
+                  "text-xs",
+                  isConnected ? "bg-green-500 hover:bg-green-600" : "bg-gray-400"
+                )}
+              >
+                <span className={cn(
+                  "mr-1.5 h-1.5 w-1.5 rounded-full",
+                  isConnected ? "bg-white animate-pulse" : "bg-gray-200"
+                )} />
+                {isConnected ? "Live" : "Offline"}
+              </Badge>
+            </div>
             <p className="text-sm text-muted-foreground">
               Overview of your inventory and sales performance
             </p>

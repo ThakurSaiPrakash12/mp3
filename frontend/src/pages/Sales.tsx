@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Sale, Product, PaginationInfo, salesApi, productsApi } from '@/services/api';
 import { useAuth } from '@/auth/AuthProvider';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
@@ -32,6 +34,7 @@ import {
   X
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { cn } from '@/utils/cn';
 
 export default function Sales() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -47,6 +50,13 @@ export default function Sales() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // WebSocket for real-time updates
+  const { isConnected } = useWebSocket({
+    onSaleRecorded: () => fetchSales(),
+    onProductAdded: () => fetchProducts(),
+    onStockUpdated: () => fetchSales(),
+  });
 
   useEffect(() => {
     fetchProducts();
@@ -102,7 +112,22 @@ export default function Sales() {
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+              <Badge 
+                variant={isConnected ? "default" : "secondary"} 
+                className={cn(
+                  "text-xs",
+                  isConnected ? "bg-green-500 hover:bg-green-600" : "bg-gray-400"
+                )}
+              >
+                <span className={cn(
+                  "mr-1.5 h-1.5 w-1.5 rounded-full",
+                  isConnected ? "bg-white animate-pulse" : "bg-gray-200"
+                )} />
+                {isConnected ? "Live" : "Offline"}
+              </Badge>
+            </div>
             <p className="text-sm text-muted-foreground">
               View and manage sales records
             </p>

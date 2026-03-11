@@ -1,8 +1,9 @@
 import jwt
 import os
 from datetime import datetime, timedelta
-from functools import wraps
-from flask import request, jsonify
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Dict
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 
@@ -12,6 +13,8 @@ USERS = {
     "viewer": {"password": "viewer123", "role": "read-only"}
 }
 
+security = HTTPBearer()
+
 def generate_token(username, role):
     payload = {
         "username": username,
@@ -20,54 +23,32 @@ def generate_token(username, role):
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
-def verify_token(token):
+def verify_token(token: str) -> Dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         return payload
     except jwt.ExpiredSignatureError:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
+        )
     except jwt.InvalidTokenError:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
 
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get("Authorization")
-        
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-        
-        if token.startswith("Bearer "):
-            token = token[7:]
-        
-        payload = verify_token(token)
-        if not payload:
-            return jsonify({"error": "Invalid or expired token"}), 401
-        
-        request.user = payload
-        return f(*args, **kwargs)
-    
-    return decorated
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict:
+    """Dependency to get current user from token"""
+    token = credentials.credentials
+    payload = verify_token(token)
+    return payload
 
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get("Authorization")
-        
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-        
-        if token.startswith("Bearer "):
-            token = token[7:]
-        
-        payload = verify_token(token)
-        if not payload:
-            return jsonify({"error": "Invalid or expired token"}), 401
-        
-        if payload.get("role") != "admin":
-            return jsonify({"error": "Admin access required"}), 403
-        
-        request.user = payload
-        return f(*args, **kwargs)
-    
-    return decorated
+def get_admin_user(current_user: Dict = Depends(get_current_user)) -> Dict:
+    """Dependency to ensure user has admin role"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user

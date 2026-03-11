@@ -1,49 +1,38 @@
 """
 CSV Upload endpoint for bulk product uploads
 """
-from flask import request, jsonify
+from fastapi import HTTPException, UploadFile, Query
 from database import get_db_connection
 from audit import log_audit
-from auth import admin_required
 import csv
 import io
 
-def upload_csv_handler():
+async def upload_csv_handler(
+    file: UploadFile,
+    mode: str = Query("skip", regex="^(skip|update_stock)$", description="Duplicate handling mode")
+):
     """
     Handle CSV file upload for bulk product creation.
     Admin only. Validates each row and performs bulk insert.
     Supports duplicate handling with skip or update_stock modes.
     """
-    # Get mode parameter (skip or update_stock)
-    mode = request.args.get('mode', 'skip')
-    if mode not in ['skip', 'update_stock']:
-        return jsonify({"error": "Invalid mode. Use 'skip' or 'update_stock'"}), 400
-    
-    # Check if file is present in the request
-    if 'file' not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    
-    file = request.files['file']
-    
-    # Check if file is selected
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
-    
     # Check if file has .csv extension
     if not file.filename.endswith('.csv'):
-        return jsonify({"error": "Only CSV files are allowed"}), 400
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
     
     try:
         # Read file content
-        stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
+        contents = await file.read()
+        stream = io.StringIO(contents.decode("UTF-8"), newline=None)
         csv_reader = csv.DictReader(stream)
         
         # Validate CSV headers
         expected_headers = {'name', 'stock', 'min_stock', 'lead_time'}
         if not csv_reader.fieldnames or set(csv_reader.fieldnames) != expected_headers:
-            return jsonify({
-                "error": "Invalid CSV format. Expected headers: name,stock,min_stock,lead_time"
-            }), 400
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid CSV format. Expected headers: name,stock,min_stock,lead_time"
+            )
         
         # Lists to store valid rows, errors, and tracking
         valid_products = []
@@ -151,7 +140,7 @@ def upload_csv_handler():
                                 table_name="products",
                                 record_id=existing[0],
                                 details={"name": name},
-                                ip_address=request.remote_addr
+                                ip_address="127.0.0.1"  # Default for CSV upload
                             )
                         elif mode == 'update_stock':
                             # Update existing product
@@ -180,7 +169,7 @@ def upload_csv_handler():
                                     "min_stock": min_stock,
                                     "lead_time": lead_time
                                 },
-                                ip_address=request.remote_addr
+                                ip_address="127.0.0.1"  # Default for CSV upload
                             )
                     else:
                         # Insert new product
@@ -197,10 +186,10 @@ def upload_csv_handler():
                 conn.rollback()
                 cur.close()
                 conn.close()
-                return jsonify({
-                    "error": "Database error during processing",
-                    "details": str(e)
-                }), 500
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Database error during processing: {str(e)}"
+                )
             
             finally:
                 cur.close()
@@ -217,23 +206,24 @@ def upload_csv_handler():
                 "skipped": skipped_count,
                 "updated": updated_count,
                 "failed": failed_count,
-                "mode": mode,
-                "uploader": request.user.get("username")
+                "mode": mode
             },
-            ip_address=request.remote_addr
+            ip_address="127.0.0.1"  # Default for CSV upload
         )
         
-        return jsonify({
+        return {
             "message": "CSV processed",
             "inserted": inserted_count,
             "skipped": skipped_count,
             "updated": updated_count,
             "failed": failed_count,
             "errors": errors
-        }), 200
+        }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        return jsonify({
-            "error": "Failed to process CSV file",
-            "details": str(e)
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process CSV file: {str(e)}"
+        )

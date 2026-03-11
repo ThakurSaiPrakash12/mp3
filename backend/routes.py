@@ -1,41 +1,52 @@
-from flask import Blueprint, request, jsonify
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, UploadFile, File
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, List
 from database import get_db_connection
 from utils import calculate_reorder_status
 from datetime import date, datetime, timedelta
 from audit import log_audit
-from auth import generate_token, USERS, token_required, admin_required
+from auth import generate_token, USERS, get_current_user, get_admin_user
 from csv_upload import upload_csv_handler
+from websocket_manager import broadcast_event
 
-routes = Blueprint("routes", __name__)
+router = APIRouter()
 
-# Validation Helpers
-def validate_pagination(page, limit):
+# Pydantic models
+class LoginRequest(BaseModel):
+    username: str = Field(..., description="Username")
+    password: str = Field(..., description="Password")
+
+class LoginResponse(BaseModel):
+    token: str
+    username: str
+    role: str
+
+class ProductCreate(BaseModel):
+    name: str = Field(..., min_length=1, description="Product name")
+    stock: int = Field(..., ge=0, description="Stock quantity")
+    min_stock: int = Field(..., ge=0, description="Minimum stock level")
+    lead_time: int = Field(5, gt=0, description="Lead time in days")
+
+class SaleCreate(BaseModel):
+    product_id: int = Field(..., gt=0, description="Product ID")
+    quantity: int = Field(..., gt=0, description="Sale quantity")
+    sale_date: Optional[date] = Field(None, description="Sale date (defaults to today)")
+
+class StockUpdate(BaseModel):
+    new_stock: int = Field(..., gt=0, description="Quantity to add to current stock")
+
+class MessageResponse(BaseModel):
+    message: str
+
+# Helper functions
+def validate_pagination(page: int, limit: int):
     """Validate and return pagination parameters"""
     if page < 1:
-        return None, (jsonify({"error": "Page must be >= 1"}), 400)
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
     if limit < 1 or limit > 100:
-        return None, (jsonify({"error": "Limit must be between 1 and 100"}), 400)
-    return (page - 1) * limit, None
-
-def validate_positive_int(value, field_name):
-    """Validate positive integer field"""
-    try:
-        val = int(value)
-        if val <= 0:
-            return None, (jsonify({"error": f"{field_name} must be greater than 0"}), 400)
-        return val, None
-    except (ValueError, TypeError):
-        return None, (jsonify({"error": f"{field_name} must be a valid integer"}), 400)
-
-def validate_non_negative_int(value, field_name):
-    """Validate non-negative integer field"""
-    try:
-        val = int(value)
-        if val < 0:
-            return None, (jsonify({"error": f"{field_name} cannot be negative"}), 400)
-        return val, None
-    except (ValueError, TypeError):
-        return None, (jsonify({"error": f"{field_name} must be a valid integer"}), 400)
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+    return (page - 1) * limit
 
 def get_product_reorder_info(cur, product_id, stock, min_stock, lead_time):
     """Calculate reorder info for a product (DRY principle)"""
@@ -46,36 +57,61 @@ def get_product_reorder_info(cur, product_id, stock, min_stock, lead_time):
     avg_sales = cur.fetchone()[0] / 7
     return calculate_reorder_status(stock, min_stock, avg_sales, lead_time)
 
+# Root endpoint
+@router.get("/", tags=["General"])
+async def root():
+    """
+    Root endpoint providing API information
+    """
+    return {
+        "message": "Inventory Management System API",
+        "status": "running",
+        "docs": "/docs",
+        "endpoints": {
+            "POST /login": "Authenticate user",
+            "GET /dashboard": "Get dashboard data",
+            "GET /products": "List all products",
+            "POST /products": "Add new product",
+            "GET /sales": "List all sales",
+            "POST /sales": "Record new sale",
+            "GET /reorder-check/{id}": "Check reorder status",
+            "POST /products/{id}/reorder-reset": "Reset reorder date",
+            "POST /products/upload-csv": "Upload products via CSV"
+        }
+    }
+
 # Login endpoint
-@routes.route("/login", methods=["POST"])
-def login():
-    data = request.json
+@router.post("/login", response_model=LoginResponse, tags=["Authentication"])
+async def login(credentials: LoginRequest):
+    """
+    Authenticate user and receive JWT token
     
-    if not data:
-        return jsonify({"error": "Request body is required"}), 400
+    - **username**: User's username (admin or viewer)
+    - **password**: User's password
+    """
+    user = USERS.get(credentials.username)
+    if not user or user["password"] != credentials.password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
     
-    username = data.get("username")
-    password = data.get("password")
+    token = generate_token(credentials.username, user["role"])
     
-    if not username or not password:
-        return jsonify({"error": "Username and password are required"}), 400
-    
-    user = USERS.get(username)
-    if not user or user["password"] != password:
-        return jsonify({"error": "Invalid credentials"}), 401
-    
-    token = generate_token(username, user["role"])
-    
-    return jsonify({
+    return {
         "token": token,
-        "username": username,
+        "username": credentials.username,
         "role": user["role"]
-    })
+    }
 
 # Dashboard - Real data from database
-@routes.route("/dashboard", methods=["GET"])
-@token_required
-def dashboard():
+@router.get("/dashboard", tags=["Dashboard"])
+async def dashboard(current_user: Dict = Depends(get_current_user)):
+    """
+    Get dashboard statistics and recent sales data
+    
+    Requires authentication token
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -89,7 +125,13 @@ def dashboard():
         reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
         low_stock_count += (stock < min_stock)
         reorder_required_count += reorder_info["reorder_required"]
-        stock_levels.append({"id": product_id, "name": name, "stock": stock, "min_stock": min_stock, "reorder_required": reorder_info["reorder_required"]})
+        stock_levels.append({
+            "id": product_id,
+            "name": name,
+            "stock": stock,
+            "min_stock": min_stock,
+            "reorder_required": reorder_info["reorder_required"]
+        })
     
     cur.execute("""
         SELECT sale_date::date, COALESCE(SUM(quantity), 0) as quantity
@@ -98,7 +140,13 @@ def dashboard():
     """)
     sales_dict = {row[0]: row[1] for row in cur.fetchall()}
     
-    sales_trend = [{"date": (datetime.now().date() - timedelta(days=6-i)).isoformat(), "quantity": sales_dict.get(datetime.now().date() - timedelta(days=6-i), 0)} for i in range(7)]
+    sales_trend = [
+        {
+            "date": (datetime.now().date() - timedelta(days=6-i)).isoformat(),
+            "quantity": sales_dict.get(datetime.now().date() - timedelta(days=6-i), 0)
+        }
+        for i in range(7)
+    ]
     
     cur.execute("SELECT COALESCE(SUM(quantity), 0) FROM sales WHERE sale_date >= CURRENT_DATE - INTERVAL '7 days'")
     total_sales = cur.fetchone()[0]
@@ -106,23 +154,36 @@ def dashboard():
     cur.close()
     conn.close()
     
-    return jsonify({
-        "summary": {"total_products": len(products), "total_sales_last_7_days": total_sales, "low_stock_items": low_stock_count, "reorder_required_items": reorder_required_count},
+    return {
+        "summary": {
+            "total_products": len(products),
+            "total_sales_last_7_days": total_sales,
+            "low_stock_items": low_stock_count,
+            "reorder_required_items": reorder_required_count
+        },
         "sales_trend": sales_trend,
-        "stock_distribution": {"well_stocked": len(products) - reorder_required_count, "reorder_required": reorder_required_count},
+        "stock_distribution": {
+            "well_stocked": len(products) - reorder_required_count,
+            "reorder_required": reorder_required_count
+        },
         "stock_levels": stock_levels[:10]
-    })
+    }
 
-@routes.route("/products", methods=["GET"])
-@token_required
-def get_products():
-    page = request.args.get("page", 1, type=int)
-    limit = request.args.get("limit", 10, type=int)
-    search = request.args.get("search", "").strip()
+@router.get("/products", tags=["Products"])
+async def get_products(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(10, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search by product name"),
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Get list of all products with pagination and filtering
     
-    offset, error = validate_pagination(page, limit)
-    if error:
-        return error
+    - **page**: Page number (default: 1)
+    - **limit**: Items per page (default: 10, max: 100)
+    - **search**: Search by product name (optional)
+    """
+    offset = validate_pagination(page, limit)
     
     conn = get_db_connection()
     cur = conn.cursor()
@@ -153,12 +214,21 @@ def get_products():
     products = []
     for product_id, name, stock, min_stock, lead_time, created, updated in cur.fetchall():
         reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
-        products.append({"id": product_id, "name": name, "stock": stock, "min_stock": min_stock, "lead_time": lead_time, "created_at": created.isoformat() if created else None, "updated_at": updated.isoformat() if updated else None, **reorder_info})
+        products.append({
+            "id": product_id,
+            "name": name,
+            "stock": stock,
+            "min_stock": min_stock,
+            "lead_time": lead_time,
+            "created_at": created.isoformat() if created else None,
+            "updated_at": updated.isoformat() if updated else None,
+            **reorder_info
+        })
     
     cur.close()
     conn.close()
     
-    return jsonify({
+    return {
         "products": products,
         "pagination": {
             "page": page,
@@ -166,28 +236,26 @@ def get_products():
             "total": total,
             "pages": (total + limit - 1) // limit
         }
-    })
+    }
 
-@routes.route("/products", methods=["POST"])
-@admin_required
-def add_product():
-    if not (data := request.json):
-        return jsonify({"error": "Request body is required"}), 400
+@router.post("/products", tags=["Products"], status_code=status.HTTP_201_CREATED)
+async def add_product(
+    product: ProductCreate,
+    request: Request,
+    current_user: Dict = Depends(get_admin_user)
+):
+    """
+    Add a new product (Admin only)
     
-    if not (name := data.get("name", "").strip()):
-        return jsonify({"error": "Product name is required and cannot be empty"}), 400
+    - **name**: Product name (required)
+    - **stock**: Stock quantity (required, >= 0)
+    - **min_stock**: Minimum stock level (required, >= 0)
+    - **lead_time**: Lead time in days (default: 5, must be > 0)
+    """
+    name = product.name.strip()
     
-    stock, error = validate_non_negative_int(data.get("stock"), "Stock")
-    if error:
-        return error
-    
-    min_stock, error = validate_non_negative_int(data.get("min_stock"), "Minimum stock")
-    if error:
-        return error
-    
-    lead_time, error = validate_positive_int(data.get("lead_time", 5), "Lead time")
-    if error:
-        return error
+    if not name:
+        raise HTTPException(status_code=400, detail="Product name is required and cannot be empty")
     
     conn = get_db_connection()
     cur = conn.cursor()
@@ -196,30 +264,55 @@ def add_product():
     if cur.fetchone():
         cur.close()
         conn.close()
-        return jsonify({"error": "Product with this name already exists"}), 409
+        raise HTTPException(status_code=409, detail="Product with this name already exists")
 
-    cur.execute("INSERT INTO products (name, stock, min_stock, lead_time) VALUES (%s, %s, %s, %s) RETURNING id", (name, stock, min_stock, lead_time))
+    cur.execute(
+        "INSERT INTO products (name, stock, min_stock, lead_time) VALUES (%s, %s, %s, %s) RETURNING id",
+        (name, product.stock, product.min_stock, product.lead_time)
+    )
     product_id = cur.fetchone()[0]
     conn.commit()
     
-    log_audit(action="INSERT_PRODUCT", table_name="products", record_id=product_id, details={"name": name, "stock": stock, "min_stock": min_stock, "lead_time": lead_time}, ip_address=request.remote_addr)
+    log_audit(
+        action="INSERT_PRODUCT",
+        table_name="products",
+        record_id=product_id,
+        details={"name": name, "stock": product.stock, "min_stock": product.min_stock, "lead_time": product.lead_time},
+        ip_address=request.client.host
+    )
+    
+    # Broadcast real-time event
+    await broadcast_event("product_added", {
+        "product_id": product_id,
+        "name": name,
+        "stock": product.stock,
+        "min_stock": product.min_stock,
+        "lead_time": product.lead_time
+    })
     
     cur.close()
     conn.close()
-    return jsonify({"message": "Product added successfully"})
+    return {"message": "Product added successfully", "product_id": product_id}
 
-@routes.route("/sales", methods=["GET"])
-@token_required
-def get_sales():
-    product_id = request.args.get("product_id", type=int)
-    start_date = request.args.get("start_date")
-    end_date = request.args.get("end_date")
-    page = request.args.get("page", 1, type=int)
-    limit = request.args.get("limit", 10, type=int)
+@router.get("/sales", tags=["Sales"])
+async def get_sales(
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    start_date: Optional[date] = Query(None, description="Start date filter"),
+    end_date: Optional[date] = Query(None, description="End date filter"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(10, ge=1, le=100, description="Items per page"),
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Get list of all sales records with pagination
     
-    offset, error = validate_pagination(page, limit)
-    if error:
-        return error
+    - **product_id**: Filter by product ID (optional)
+    - **start_date**: Start date filter (optional)
+    - **end_date**: End date filter (optional)
+    - **page**: Page number (default: 1)
+    - **limit**: Items per page (default: 10, max: 100)
+    """
+    offset = validate_pagination(page, limit)
     
     # Build query dynamically
     conditions = []
@@ -258,12 +351,22 @@ def get_sales():
     """
     cur.execute(sales_query, params + [limit, offset])
     
-    sales = [{"id": r[0], "product_id": r[1], "product_name": r[2], "quantity": r[3], "sale_date": r[4].isoformat() if r[4] else None, "created_at": r[5].isoformat() if r[5] else None} for r in cur.fetchall()]
+    sales = [
+        {
+            "id": r[0],
+            "product_id": r[1],
+            "product_name": r[2],
+            "quantity": r[3],
+            "sale_date": r[4].isoformat() if r[4] else None,
+            "created_at": r[5].isoformat() if r[5] else None
+        }
+        for r in cur.fetchall()
+    ]
     
     cur.close()
     conn.close()
     
-    return jsonify({
+    return {
         "sales": sales,
         "pagination": {
             "page": page,
@@ -273,54 +376,94 @@ def get_sales():
         },
         "filters": {
             "product_id": product_id,
-            "start_date": start_date,
-            "end_date": end_date
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None
         }
-    })
+    }
 
-@routes.route("/sales", methods=["POST"])
-@admin_required
-def add_sale():
-    if not (data := request.json):
-        return jsonify({"error": "Request body is required"}), 400
+@router.post("/sales", tags=["Sales"], status_code=status.HTTP_201_CREATED)
+async def add_sale(
+    sale: SaleCreate,
+    request: Request,
+    current_user: Dict = Depends(get_admin_user)
+):
+    """
+    Record a new sale (Admin only)
     
-    product_id, error = validate_positive_int(data.get("product_id"), "Product ID")
-    if error:
-        return error
-    
-    quantity, error = validate_positive_int(data.get("quantity"), "Quantity")
-    if error:
-        return error
+    - **product_id**: Product ID (required)
+    - **quantity**: Sale quantity (required, > 0)
+    - **sale_date**: Sale date (optional, defaults to today)
+    """
+    sale_date = sale.sale_date or date.today()
 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-        if not (result := cur.fetchone()):
-            return jsonify({"error": f"Product with ID {product_id} does not exist"}), 404
+        cur.execute("SELECT stock FROM products WHERE id = %s", (sale.product_id,))
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Product with ID {sale.product_id} does not exist")
         
         current_stock = result[0]
-        if current_stock < quantity:
-            return jsonify({"error": f"Insufficient stock. Available: {current_stock}, Requested: {quantity}"}), 400
+        if current_stock < sale.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock. Available: {current_stock}, Requested: {sale.quantity}"
+            )
 
-        cur.execute("INSERT INTO sales (product_id, quantity, sale_date) VALUES (%s, %s, %s)", (product_id, quantity, date.today()))
-        cur.execute("UPDATE products SET stock = stock - %s WHERE id = %s", (quantity, product_id))
+        cur.execute("INSERT INTO sales (product_id, quantity, sale_date) VALUES (%s, %s, %s)", 
+                   (sale.product_id, sale.quantity, sale_date))
+        cur.execute("UPDATE products SET stock = stock - %s WHERE id = %s", 
+                   (sale.quantity, sale.product_id))
         conn.commit()
         
-        log_audit(action="RECORD_SALE", table_name="sales", record_id=product_id, details={"product_id": product_id, "quantity": quantity, "previous_stock": current_stock, "new_stock": current_stock - quantity}, ip_address=request.remote_addr)
+        log_audit(
+            action="RECORD_SALE",
+            table_name="sales",
+            record_id=sale.product_id,
+            details={
+                "product_id": sale.product_id,
+                "quantity": sale.quantity,
+                "previous_stock": current_stock,
+                "new_stock": current_stock - sale.quantity
+            },
+            ip_address=request.client.host
+        )
 
-        cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-        return jsonify({"message": "Sale recorded", "updated_stock": cur.fetchone()[0]})
+        cur.execute("SELECT stock FROM products WHERE id = %s", (sale.product_id,))
+        new_stock = cur.fetchone()[0]
+        
+        # Broadcast real-time event
+        await broadcast_event("sale_recorded", {
+            "product_id": sale.product_id,
+            "quantity": sale.quantity,
+            "previous_stock": current_stock,
+            "new_stock": new_stock,
+            "sale_date": str(sale_date)
+        })
+        
+        return {"message": "Sale recorded", "updated_stock": new_stock}
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
-        return jsonify({"error": "Transaction failed", "details": str(e)}), 500
+        raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
     finally:
         cur.close()
         conn.close()
 
-@routes.route("/reorder-check/<int:product_id>", methods=["GET"])
-@token_required
-def reorder_check(product_id):
+@router.get("/reorder-check/{product_id}", tags=["Products"])
+async def reorder_check(
+    product_id: int,
+    current_user: Dict = Depends(get_current_user)
+):
+    """
+    Check reorder status for a specific product
+    
+    - **product_id**: Product ID
+    """
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -330,7 +473,7 @@ def reorder_check(product_id):
     if not result:
         cur.close()
         conn.close()
-        return jsonify({"error": "Product not found"}), 404
+        raise HTTPException(status_code=404, detail="Product not found")
     
     stock, min_stock, lead_time = result
     reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
@@ -338,47 +481,87 @@ def reorder_check(product_id):
     cur.close()
     conn.close()
 
-    return jsonify({
-        "stock": stock, "min_stock": min_stock, "lead_time": lead_time,
+    return {
+        "stock": stock,
+        "min_stock": min_stock,
+        "lead_time": lead_time,
         "average_daily_sales": reorder_info["reorder_level"] / lead_time if lead_time > 0 else 0,
         **reorder_info
-    })
+    }
 
-@routes.route("/products/<int:product_id>/reorder-reset", methods=["POST"])
-@admin_required
-def reorder_reset(product_id):
-    if not (data := request.json):
-        return jsonify({"error": "Request body is required"}), 400
+@router.post("/products/{product_id}/reorder-reset", tags=["Products"])
+async def reorder_reset(
+    product_id: int,
+    stock_update: StockUpdate,
+    request: Request,
+    current_user: Dict = Depends(get_admin_user)
+):
+    """
+    Add stock to a product (Admin only)
     
-    new_stock, error = validate_positive_int(data.get("new_stock"), "New stock")
-    if error:
-        return error
-    
+    - **product_id**: Product ID
+    - **new_stock**: Quantity to ADD to current stock (required, > 0)
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute("SELECT stock FROM products WHERE id = %s", (product_id,))
-        if not (result := cur.fetchone()):
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Product not found"}), 404
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Product not found")
         
         previous_stock = result[0]
-        cur.execute("UPDATE products SET stock = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (new_stock, product_id))
+        updated_stock = previous_stock + stock_update.new_stock
+        
+        cur.execute("UPDATE products SET stock = stock + %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                   (stock_update.new_stock, product_id))
         conn.commit()
         
-        log_audit(action="REORDER_RESET", table_name="products", record_id=product_id, details={"previous_stock": previous_stock, "new_stock": new_stock, "difference": new_stock - previous_stock}, ip_address=request.remote_addr)
+        log_audit(
+            action="REORDER_RESET",
+            table_name="products",
+            record_id=product_id,
+            details={
+                "previous_stock": previous_stock,
+                "quantity_added": stock_update.new_stock,
+                "new_stock": updated_stock
+            },
+            ip_address=request.client.host
+        )
         
-        return jsonify({"message": "Stock replenished successfully", "previous_stock": previous_stock, "current_stock": new_stock})
+        # Broadcast real-time event
+        await broadcast_event("stock_updated", {
+            "product_id": product_id,
+            "previous_stock": previous_stock,
+            "quantity_added": stock_update.new_stock,
+            "new_stock": updated_stock
+        })
+        
+        return {
+            "message": "Stock replenished successfully",
+            "previous_stock": previous_stock,
+            "current_stock": updated_stock
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
-        return jsonify({"error": "Transaction failed", "details": str(e)}), 500
+        raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
     finally:
         cur.close()
         conn.close()
 
 # CSV Bulk Upload for Products
-@routes.route("/products/upload-csv", methods=["POST"])
-@admin_required
-def upload_csv():
-    return upload_csv_handler()
+@router.post("/products/upload-csv", tags=["Products"])
+async def upload_csv(
+    file: UploadFile = File(...),
+    current_user: Dict = Depends(get_admin_user)
+):
+    """
+    Bulk upload products via CSV file (Admin only)
+    
+    CSV format: name, sku, stock, min_stock, lead_time
+    """
+    return await upload_csv_handler(file)

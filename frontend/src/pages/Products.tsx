@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Product, PaginationInfo, productsApi } from '@/services/api';
 import { useAuth } from '@/auth/AuthProvider';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -60,6 +61,36 @@ export default function Products() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [newStockValue, setNewStockValue] = useState('');
   const [isResetting, setIsResetting] = useState(false);
+
+  // WebSocket for real-time updates
+  const { isConnected, connectionStatus } = useWebSocket({
+    onProductAdded: (data) => {
+      console.log('🆕 Product added:', data);
+      toast.success(`New product added: ${data.name}`);
+      fetchProducts(); // Refresh list
+    },
+    onStockUpdated: (data) => {
+      console.log('📦 Stock updated:', data);
+      toast.info(`Stock updated for product #${data.product_id}`);
+      fetchProducts(); // Refresh list
+    },
+    onSaleRecorded: (data) => {
+      console.log('💰 Sale recorded:', data);
+      toast.info(`Sale recorded: ${data.quantity} units sold`);
+      fetchProducts(); // Refresh list
+    },
+    onProductsImported: (data) => {
+      console.log('📥 Products imported:', data);
+      toast.success(`${data.count} products imported`);
+      fetchProducts(); // Refresh list
+    },
+    onConnected: () => {
+      console.log('🔗 Real-time updates connected');
+    },
+    onDisconnected: () => {
+      console.log('🔌 Real-time updates disconnected');
+    }
+  });
 
   // Debounce search query
   useEffect(() => {
@@ -165,7 +196,7 @@ export default function Products() {
     try {
       const result = await productsApi.reorderReset(selectedProduct.id, stockNum);
       toast.success(
-        `Stock replenished: ${result.previous_stock} → ${result.current_stock}`
+        `Stock added: ${result.previous_stock} + ${stockNum} = ${result.current_stock}`
       );
       
       // Reset dialog state
@@ -199,7 +230,22 @@ export default function Products() {
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
+              <Badge 
+                variant={isConnected ? "default" : "secondary"} 
+                className={cn(
+                  "text-xs",
+                  isConnected ? "bg-green-500 hover:bg-green-600" : "bg-gray-400"
+                )}
+              >
+                <span className={cn(
+                  "mr-1.5 h-1.5 w-1.5 rounded-full",
+                  isConnected ? "bg-white animate-pulse" : "bg-gray-200"
+                )} />
+                {isConnected ? "Live" : "Offline"}
+              </Badge>
+            </div>
             <p className="text-sm text-muted-foreground">
               Manage your inventory and stock levels
             </p>
@@ -356,7 +402,7 @@ export default function Products() {
                                 onClick={() => openResetDialog(product)}
                               >
                                 <RefreshCw className="mr-2 h-3 w-3" />
-                                Reset Stock
+                                Add Stock
                               </Button>
                             )}
                           </TableCell>
@@ -470,11 +516,11 @@ export default function Products() {
       <Dialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reset Stock - Reorder Replenishment</DialogTitle>
+            <DialogTitle>Add Stock - Reorder Replenishment</DialogTitle>
             <DialogDescription>
               {selectedProduct && (
                 <>
-                  Replenish stock for <strong>{selectedProduct.name}</strong>. Current stock: {selectedProduct.stock}
+                  Add stock to <strong>{selectedProduct.name}</strong>. Current stock: {selectedProduct.stock}
                 </>
               )}
             </DialogDescription>
@@ -482,19 +528,19 @@ export default function Products() {
           
           <div className="space-y-4">
             <div>
-              <Label htmlFor="new-stock">New Stock Quantity</Label>
+              <Label htmlFor="new-stock">Quantity to Add</Label>
               <Input
                 id="new-stock"
                 type="number"
                 min="1"
-                placeholder="Enter new stock quantity"
+                placeholder="Enter quantity to add to current stock"
                 value={newStockValue}
                 onChange={(e) => setNewStockValue(e.target.value)}
                 disabled={isResetting}
                 className="mt-2"
               />
               <p className="mt-2 text-xs text-muted-foreground">
-                This will replace the current stock with the new value (not add to it).
+                This will ADD to the current stock (not replace it).
               </p>
             </div>
           </div>
@@ -518,12 +564,12 @@ export default function Products() {
               {isResetting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Resetting...
+                  Adding Stock...
                 </>
               ) : (
                 <>
                   <RefreshCw className="mr-2 h-4 w-4" />
-                  Reset Stock
+                  Add Stock
                 </>
               )}
             </Button>
