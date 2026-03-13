@@ -7,11 +7,14 @@ import { AuthProvider } from "@/auth/AuthProvider";
 import { ProtectedRoute } from "@/auth/ProtectedRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Products from "./pages/Products";
+import Products from "./pages/products/ProductsPage";
 import AddProduct from "./pages/AddProduct";
 import Sales from "./pages/Sales";
 import AddSale from "./pages/AddSale";
 import ReorderStatus from "./pages/ReorderStatus";
+import DemandForecast from "./pages/forecast/ForecastPage";
+import Suppliers from "./pages/Suppliers";
+import PurchaseOrders from "./pages/purchase/PurchaseOrdersPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -76,6 +79,30 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <ReorderStatus />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/forecast"
+              element={
+                <ProtectedRoute>
+                  <DemandForecast />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/suppliers"
+              element={
+                <ProtectedRoute>
+                  <Suppliers />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/purchase-orders"
+              element={
+                <ProtectedRoute>
+                  <PurchaseOrders />
                 </ProtectedRoute>
               }
             />

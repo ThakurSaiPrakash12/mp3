@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { Product, ReorderStatus as ReorderStatusType, productsApi, reorderApi } from '@/services/api';
+import { useState, useEffect, useMemo } from 'react';
+import { Product, productsApi } from '@/services/api';
+import { List, RowComponentProps } from 'react-window';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,7 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { 
   AlertTriangle, 
   CheckCircle2, 
-  Loader2, 
   RefreshCw,
   Package,
   TrendingDown,
@@ -17,14 +17,15 @@ import { cn } from '@/utils/cn';
 
 interface ProductReorderInfo {
   product: Product;
-  reorderStatus: ReorderStatusType | null;
-  isLoading: boolean;
-  error: boolean;
 }
 
 export default function ReorderStatus() {
   const [productData, setProductData] = useState<ProductReorderInfo[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+  const PAGE_SIZE = 100;
+  const VIRTUALIZATION_THRESHOLD = 120;
+  const VIRTUAL_LIST_MAX_HEIGHT = 620;
+  const VIRTUAL_ROW_HEIGHT = 190;
 
   useEffect(() => {
     fetchProducts();
@@ -34,39 +35,27 @@ export default function ReorderStatus() {
     setIsLoadingProducts(true);
     
     try {
-      const response = await productsApi.getAll(1, 100);
-      
-      // Initialize with loading states
-      const initialData: ProductReorderInfo[] = response.products.map((product) => ({
-        product,
-        reorderStatus: null,
-        isLoading: true,
-        error: false,
-      }));
-      setProductData(initialData);
-      setIsLoadingProducts(false);
-      
-      // Fetch reorder status for each product
-      for (const product of response.products) {
-        try {
-          const reorderStatus = await reorderApi.check(product.id);
-          setProductData((prev) =>
-            prev.map((item) =>
-              item.product.id === product.id
-                ? { ...item, reorderStatus, isLoading: false }
-                : item
-            )
-          );
-        } catch {
-          setProductData((prev) =>
-            prev.map((item) =>
-              item.product.id === product.id
-                ? { ...item, isLoading: false, error: true }
-                : item
-            )
-          );
+      const firstPage = await productsApi.getAll(1, PAGE_SIZE);
+
+      const allProducts: Product[] = [...firstPage.products];
+
+      if (firstPage.pagination.pages > 1) {
+        const remainingRequests = [];
+        for (let page = 2; page <= firstPage.pagination.pages; page += 1) {
+          remainingRequests.push(productsApi.getAll(page, PAGE_SIZE));
+        }
+
+        const remainingPages = await Promise.all(remainingRequests);
+        for (const pageData of remainingPages) {
+          allProducts.push(...pageData.products);
         }
       }
+
+      const finalData: ProductReorderInfo[] = allProducts.map((product) => ({
+        product,
+      }));
+      setProductData(finalData);
+      setIsLoadingProducts(false);
     } catch (err) {
       console.error('Products fetch error:', err);
       setIsLoadingProducts(false);
@@ -77,13 +66,12 @@ export default function ReorderStatus() {
     fetchProducts();
   };
 
-  // Classify products by status
-  const statusGroups = {
-    OUT_OF_STOCK: productData.filter(i => i.reorderStatus?.status === 'OUT_OF_STOCK'),
-    CRITICAL: productData.filter(i => i.reorderStatus?.status === 'CRITICAL'),
-    LOW: productData.filter(i => i.reorderStatus?.status === 'LOW'),
-    OK: productData.filter(i => i.reorderStatus?.status === 'OK')
-  };
+  const statusGroups = useMemo(() => ({
+    OUT_OF_STOCK: productData.filter(i => i.product.status === 'OUT_OF_STOCK'),
+    CRITICAL: productData.filter(i => i.product.status === 'CRITICAL'),
+    LOW: productData.filter(i => i.product.status === 'LOW'),
+    OK: productData.filter(i => i.product.status === 'OK')
+  }), [productData]);
   
   const requiresReorder = [...statusGroups.OUT_OF_STOCK, ...statusGroups.CRITICAL];
 
@@ -157,13 +145,6 @@ export default function ReorderStatus() {
           </Card>
         </div>
 
-        {/* Loading State */}
-        {isLoadingProducts && (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        )}
-
         {/* Status Sections */}
         {!isLoadingProducts && sections.map(({ key, title, icon: Icon, color }) => {
           const items = statusGroups[key];
@@ -173,11 +154,26 @@ export default function ReorderStatus() {
                 <Icon className="h-5 w-5" />
                 {title} ({items.length})
               </h2>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {items.map((item) => (
-                  <ReorderCard key={item.product.id} data={item} />
-                ))}
-              </div>
+              {items.length >= VIRTUALIZATION_THRESHOLD ? (
+                <Card>
+                  <CardContent className="p-3">
+                    <List
+                      rowComponent={VirtualizedRow}
+                      rowCount={items.length}
+                      rowHeight={VIRTUAL_ROW_HEIGHT}
+                      rowProps={{ items }}
+                      overscanCount={8}
+                      style={{ height: Math.min(VIRTUAL_LIST_MAX_HEIGHT, items.length * VIRTUAL_ROW_HEIGHT) }}
+                    />
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {items.map((item) => (
+                    <ReorderCard key={item.product.id} data={item} />
+                  ))}
+                </div>
+              )}
             </div>
           ) : null;
         })}
@@ -196,9 +192,19 @@ export default function ReorderStatus() {
   );
 }
 
+function VirtualizedRow({ index, style, items }: RowComponentProps<{ items: ProductReorderInfo[] }>) {
+  const item = items[index];
+
+  return (
+    <div style={style} className="px-1 py-2">
+      <ReorderCard data={item} />
+    </div>
+  );
+}
+
 function ReorderCard({ data }: { data: ProductReorderInfo }) {
-  const { product, reorderStatus, isLoading, error } = data;
-  const status = reorderStatus?.status;
+  const { product } = data;
+  const status = product.status;
   const needsReorder = status === 'CRITICAL' || status === 'OUT_OF_STOCK';
 
   const getBadgeProps = () => {
@@ -218,56 +224,46 @@ function ReorderCard({ data }: { data: ProductReorderInfo }) {
       needsReorder && status !== 'OUT_OF_STOCK' && "border-destructive/50 bg-destructive/5"
     )}>
       <CardContent className="p-4">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="font-medium leading-tight">{product.name}</h3>
+            <Badge {...getBadgeProps()} />
           </div>
-        ) : error ? (
-          <div className="text-center py-4">
-            <p className="text-sm text-destructive">Failed to load status</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="font-medium leading-tight">{product.name}</h3>
-              <Badge {...getBadgeProps()} />
-            </div>
 
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="flex items-center gap-2">
-                <Package className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="text-muted-foreground">Stock</p>
-                  <p className={cn("font-medium", needsReorder && "text-destructive")}>
-                    {reorderStatus?.stock ?? product.stock}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="text-muted-foreground">Avg Daily Sales</p>
-                  <p className="font-medium">
-                    {reorderStatus?.average_daily_sales.toFixed(1) ?? '-'}
-                  </p>
-                </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Package className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-muted-foreground">Stock</p>
+                <p className={cn("font-medium", needsReorder && "text-destructive")}>
+                  {product.stock}
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-sm">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <span className="text-muted-foreground">Lead time:</span>
-              <span className="font-medium">{product.lead_time} days</span>
-            </div>
-
-            {needsReorder && reorderStatus && reorderStatus.average_daily_sales > 0 && (
-              <div className="mt-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
-                Stock will run out in ~{Math.floor(reorderStatus.stock / reorderStatus.average_daily_sales)} days
+            <div className="flex items-center gap-2">
+              <TrendingDown className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-muted-foreground">Forecast Daily</p>
+                <p className="font-medium">
+                  {product.forecast_daily !== undefined ? product.forecast_daily.toFixed(1) : '-'}
+                </p>
               </div>
-            )}
+            </div>
           </div>
-        )}
+
+          <div className="flex items-center gap-2 text-sm">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground">Lead time:</span>
+            <span className="font-medium">{product.lead_time} days</span>
+          </div>
+
+          {needsReorder && product.days_of_inventory !== null && product.days_of_inventory !== undefined && (
+            <div className="mt-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+              Stock will last ~{product.days_of_inventory.toFixed(1)} days
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

@@ -10,7 +10,10 @@ import {
   Plus,
   Menu,
   X,
-  LayoutDashboard
+  LayoutDashboard,
+  Activity,
+  Users,
+  Truck
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/utils/cn';
@@ -23,6 +26,9 @@ const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/products', label: 'Products', icon: Package },
   { path: '/sales', label: 'Sales', icon: ShoppingCart },
+  { path: '/suppliers', label: 'Suppliers', icon: Users },
+  { path: '/purchase-orders', label: 'Purchase Orders', icon: Truck },
+  { path: '/forecast', label: 'Demand Forecast', icon: Activity },
   { path: '/reorder', label: 'Reorder Status', icon: AlertTriangle },
 ];
 

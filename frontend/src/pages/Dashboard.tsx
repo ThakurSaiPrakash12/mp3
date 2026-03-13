@@ -1,61 +1,62 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { dashboardApi } from '@/services/api';
+import {
+  analyticsApi,
+  dashboardApi,
+  DashboardData,
+  ProfitAnalytics,
+} from '@/services/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  AreaChart,
   Area,
-  BarChart,
+  AreaChart,
   Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
 } from 'recharts';
 import {
-  Package,
-  ShoppingCart,
   AlertTriangle,
-  TrendingUp,
-  Loader2,
   ArrowRight,
+  Loader2,
+  Package,
   RefreshCw,
+  ShoppingCart,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
+import { formatIndianCurrency } from '@/utils/currency';
 
-const COLORS = ['hsl(var(--success))', 'hsl(var(--destructive))'];
+function formatTooltipValue(value: number | string) {
+  return typeof value === 'number' ? formatIndianCurrency(value) : value;
+}
 
 export default function Dashboard() {
-  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [profitData, setProfitData] = useState<ProfitAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-
-  // WebSocket for real-time updates
-  const { isConnected } = useWebSocket({
-    onProductAdded: () => fetchDashboardData(),
-    onStockUpdated: () => fetchDashboardData(),
-    onSaleRecorded: () => fetchDashboardData(),
-    onProductsImported: () => fetchDashboardData(),
-  });
-
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
 
   const fetchDashboardData = async () => {
     setIsLoading(true);
     setError('');
+
     try {
-      const data = await dashboardApi.get();
-      setDashboardData(data);
+      const [dashboard, analytics] = await Promise.all([
+        dashboardApi.get(),
+        analyticsApi.getProfit(),
+      ]);
+
+      setDashboardData(dashboard);
+      setProfitData(analytics);
     } catch (err) {
       setError('Failed to load dashboard data. Make sure the backend is running.');
       console.error('Dashboard fetch error:', err);
@@ -63,6 +64,17 @@ export default function Dashboard() {
       setIsLoading(false);
     }
   };
+
+  const { isConnected } = useWebSocket({
+    onProductAdded: fetchDashboardData,
+    onStockUpdated: fetchDashboardData,
+    onSaleRecorded: fetchDashboardData,
+    onProductsImported: fetchDashboardData,
+  });
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
 
   if (isLoading) {
     return (
@@ -74,7 +86,7 @@ export default function Dashboard() {
     );
   }
 
-  if (error || !dashboardData) {
+  if (error || !dashboardData || !profitData) {
     return (
       <AppLayout>
         <div className="flex flex-col items-center justify-center py-24">
@@ -89,167 +101,241 @@ export default function Dashboard() {
     );
   }
 
-  const { summary, sales_trend, stock_distribution, stock_levels } = dashboardData;
+  const { summary, sales_trend, stock_levels, reorder_attention } = dashboardData;
+  const productsToReorder = (reorder_attention && reorder_attention.length > 0)
+    ? reorder_attention
+    : stock_levels.filter((product) => product.reorder_required);
+  const coverageCandidates = stock_levels
+    .map((item) => item.days_of_inventory)
+    .filter((value): value is number => value !== null && value !== undefined);
+  const shortestCoverageDays = coverageCandidates.length > 0
+    ? Math.min(...coverageCandidates)
+    : null;
+  const reorderRecommendation = summary.reorder_required_items > 0
+    ? 'Reorder recommended'
+    : 'No reorder needed';
+  const topProfitProducts = profitData.top_profitable_products.slice(0, 5);
+  const hasRevenue = profitData.total_revenue > 0;
+  const hasUrgentStockIssue = summary.reorder_required_items > 0;
 
-  const pieData = [
-    { name: 'Well Stocked', value: stock_distribution.well_stocked },
-    { name: 'Reorder Required', value: stock_distribution.reorder_required },
-  ];
+  const managerHeadline = hasUrgentStockIssue
+    ? `${summary.reorder_required_items} item(s) need reordering today.`
+    : 'Stock levels look stable today.';
+
+  const managerSubtext = hasRevenue
+    ? 'Focus on the items that need action and keep sales moving.'
+    : 'You have purchase activity recorded, but little or no sales revenue yet.';
+
+  const profitMessage = !hasRevenue && profitData.total_cost > 0
+    ? 'You have bought stock, but sales have not covered those costs yet.'
+    : profitData.total_profit < 0
+      ? 'Costs are currently higher than revenue. Record sales or review pricing.'
+      : 'Revenue is covering costs. Keep monitoring margin and fast-moving items.';
 
   return (
     <AppLayout>
-      <div className="animate-fade-in space-y-6">
-        {/* Header */}
+      <div className="space-y-6 animate-fade-in">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <Badge 
-                variant={isConnected ? "default" : "secondary"} 
+              <h1 className="text-3xl font-bold tracking-tight">Manager Dashboard</h1>
+              <Badge
+                variant={isConnected ? 'default' : 'secondary'}
                 className={cn(
-                  "text-xs",
-                  isConnected ? "bg-green-500 hover:bg-green-600" : "bg-gray-400"
+                  'text-xs',
+                  isConnected ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'
                 )}
               >
-                <span className={cn(
-                  "mr-1.5 h-1.5 w-1.5 rounded-full",
-                  isConnected ? "bg-white animate-pulse" : "bg-gray-200"
-                )} />
-                {isConnected ? "Live" : "Offline"}
+                {isConnected ? 'Live updates' : 'Offline'}
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Overview of your inventory and sales performance
+            <p className="mt-1 text-sm text-muted-foreground">
+              A simple daily view of stock health, sales movement, and profit status.
             </p>
           </div>
+
           <Button variant="outline" onClick={fetchDashboardData}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Products
-              </CardTitle>
-              <Package className="h-4 w-4 text-muted-foreground" />
+        <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+          <Card className={cn(hasUrgentStockIssue && 'border-red-200 bg-red-50/30')}>
+            <CardHeader>
+              <CardTitle>What needs attention today</CardTitle>
+              <CardDescription>Start here before checking deeper reports.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{summary.total_products}</div>
-              <Link
-                to="/products"
-                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
-              >
-                View all <ArrowRight className="ml-1 h-3 w-3" />
-              </Link>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Sales
-              </CardTitle>
-              <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{summary.total_sales_last_7_days}</div>
-              <Link
-                to="/sales"
-                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
-              >
-                View all <ArrowRight className="ml-1 h-3 w-3" />
-              </Link>
-            </CardContent>
-          </Card>
-
-          <Card className={summary.low_stock_items > 0 ? 'border-warning/50' : ''}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Low Stock Items
-              </CardTitle>
-              <AlertTriangle
-                className={cn(
-                  'h-4 w-4',
-                  summary.low_stock_items > 0 ? 'text-warning' : 'text-muted-foreground'
-                )}
-              />
-            </CardHeader>
-            <CardContent>
-              <div className={cn('text-2xl font-bold', summary.low_stock_items > 0 && 'text-warning')}>
-                {summary.low_stock_items}
+            <CardContent className="space-y-4">
+              <div>
+                <p className={cn('text-xl font-semibold', hasUrgentStockIssue ? 'text-red-700' : 'text-green-700')}>
+                  {managerHeadline}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">{managerSubtext}</p>
               </div>
-              <Link
-                to="/reorder"
-                className="mt-1 inline-flex items-center text-xs text-muted-foreground hover:text-primary"
-              >
-                Check reorder <ArrowRight className="ml-1 h-3 w-3" />
-              </Link>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border bg-background p-4">
+                  <p className="text-xs text-muted-foreground">Products in stock</p>
+                  <p className="mt-1 text-2xl font-bold">{summary.total_products}</p>
+                </div>
+                <div className="rounded-lg border bg-background p-4">
+                  <p className="text-xs text-muted-foreground">Units sold this week</p>
+                  <p className="mt-1 text-2xl font-bold">{summary.total_sales_last_7_days}</p>
+                </div>
+                <div className="rounded-lg border bg-background p-4">
+                  <p className="text-xs text-muted-foreground">Items to reorder now</p>
+                  <p className={cn('mt-1 text-2xl font-bold', hasUrgentStockIssue ? 'text-red-600' : 'text-green-600')}>
+                    {summary.reorder_required_items}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border bg-background p-4">
+                  <p className="text-xs text-muted-foreground">Stock coverage</p>
+                  <p className="mt-1 text-lg font-semibold">
+                    {shortestCoverageDays !== null
+                      ? `Stock will last ${shortestCoverageDays.toFixed(1)} days`
+                      : 'Stock coverage unavailable'}
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-background p-4">
+                  <p className="text-xs text-muted-foreground">Reorder recommendation</p>
+                  <p className={cn(
+                    'mt-1 text-lg font-semibold',
+                    hasUrgentStockIssue ? 'text-red-600' : 'text-green-700'
+                  )}>
+                    {reorderRecommendation}
+                  </p>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
-          <Card className={summary.reorder_required_items > 0 ? 'border-destructive/50' : ''}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Reorder Required
-              </CardTitle>
-              <TrendingUp
-                className={cn(
-                  'h-4 w-4',
-                  summary.reorder_required_items > 0 ? 'text-destructive' : 'text-muted-foreground'
-                )}
-              />
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick actions</CardTitle>
+              <CardDescription>Common tasks for a manager.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div
-                className={cn('text-2xl font-bold', summary.reorder_required_items > 0 && 'text-destructive')}
-              >
-                {summary.reorder_required_items}
-              </div>
-              {summary.reorder_required_items > 0 && (
-                <Badge variant="destructive" className="mt-1">
-                  Action needed
-                </Badge>
-              )}
+            <CardContent className="grid gap-3">
+              <Button asChild variant="outline" className="justify-between">
+                <Link to="/sales/add">
+                  Record sale
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="justify-between">
+                <Link to="/purchase-orders">
+                  Purchase orders
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="justify-between">
+                <Link to="/suppliers">
+                  Suppliers
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="justify-between">
+                <Link to="/reorder">
+                  Reorder list
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
             </CardContent>
           </Card>
         </div>
 
-        {/* Charts Row */}
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Sales Trend Chart */}
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card>
-            <CardHeader>
-              <CardTitle>Sales Trend</CardTitle>
-              <CardDescription>Quantity sold over the last 7 days</CardDescription>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Products</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-[300px]">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-3xl font-bold">{summary.total_products}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Total products tracked</p>
+                </div>
+                <Package className="h-8 w-8 text-blue-500" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Sales This Week</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-3xl font-bold">{summary.total_sales_last_7_days}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Units sold in 7 days</p>
+                </div>
+                <ShoppingCart className="h-8 w-8 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className={cn(hasUrgentStockIssue && 'border-red-200 bg-red-50/30')}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Stock Alerts</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className={cn('text-3xl font-bold', hasUrgentStockIssue ? 'text-red-600' : 'text-green-600')}>
+                    {summary.low_stock_items}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">Low-stock products</p>
+                </div>
+                <AlertTriangle className={cn('h-8 w-8', hasUrgentStockIssue ? 'text-red-500' : 'text-green-500')} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className={cn(profitData.total_profit < 0 && 'border-amber-200 bg-amber-50/30')}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Profit So Far</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className={cn('text-3xl font-bold', profitData.total_profit < 0 ? 'text-amber-700' : 'text-green-700')}>
+                    {formatIndianCurrency(profitData.total_profit)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">Revenue minus cost</p>
+                </div>
+                {profitData.total_profit < 0 ? (
+                  <TrendingDown className="h-8 w-8 text-amber-600" />
+                ) : (
+                  <TrendingUp className="h-8 w-8 text-green-600" />
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Sales trend</CardTitle>
+              <CardDescription>How many units were sold over the last 7 days.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[260px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={sales_trend}>
                     <defs>
-                      <linearGradient id="colorQuantity" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="salesGradient" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
                         <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      tickLine={false}
-                      axisLine={false}
-                      className="fill-muted-foreground"
-                    />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
-                      tickLine={false}
-                      axisLine={false}
-                      className="fill-muted-foreground"
-                    />
+                    <XAxis dataKey="date" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
                     <Tooltip
                       contentStyle={{
                         backgroundColor: 'hsl(var(--card))',
@@ -261,8 +347,7 @@ export default function Dashboard() {
                       type="monotone"
                       dataKey="quantity"
                       stroke="hsl(var(--primary))"
-                      fillOpacity={1}
-                      fill="url(#colorQuantity)"
+                      fill="url(#salesGradient)"
                       strokeWidth={2}
                     />
                   </AreaChart>
@@ -271,156 +356,119 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Stock Levels Chart */}
           <Card>
             <CardHeader>
-              <CardTitle>Stock Levels</CardTitle>
-              <CardDescription>Current stock vs minimum threshold</CardDescription>
+              <CardTitle>Money summary</CardTitle>
+              <CardDescription>Simple explanation of revenue, cost, and profit.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stock_levels} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} className="fill-muted-foreground" />
-                    <YAxis
-                      dataKey="name"
-                      type="category"
-                      tick={{ fontSize: 11 }}
-                      width={80}
-                      className="fill-muted-foreground"
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                      }}
-                    />
-                    <Bar
-                      dataKey="stock"
-                      fill="hsl(var(--primary))"
-                      radius={[0, 4, 4, 0]}
-                      name="Current Stock"
-                    />
-                    <Bar
-                      dataKey="minStock"
-                      fill="hsl(var(--muted-foreground))"
-                      radius={[0, 4, 4, 0]}
-                      opacity={0.4}
-                      name="Min Stock"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Money earned</p>
+                  <p className="mt-1 text-2xl font-bold text-green-700">{formatIndianCurrency(profitData.total_revenue)}</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Money spent on stock</p>
+                  <p className="mt-1 text-2xl font-bold text-blue-700">{formatIndianCurrency(profitData.total_cost)}</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Profit so far</p>
+                  <p className={cn('mt-1 text-2xl font-bold', profitData.total_profit < 0 ? 'text-amber-700' : 'text-green-700')}>
+                    {formatIndianCurrency(profitData.total_profit)}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Profit margin</p>
+                  <p className="mt-1 text-2xl font-bold text-purple-700">{profitData.profit_margin.toFixed(1)}%</p>
+                </div>
+              </div>
+
+              <div className={cn(
+                'rounded-lg border p-4 text-sm',
+                profitData.total_profit < 0 ? 'border-amber-200 bg-amber-50/40 text-amber-900' : 'border-green-200 bg-green-50/40 text-green-900'
+              )}>
+                <p className="font-medium">Manager note</p>
+                <p className="mt-1 text-sm">{profitMessage}</p>
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Bottom Row */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Stock Distribution Pie Chart */}
+        <div className="grid gap-6 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Stock Distribution</CardTitle>
-              <CardDescription>Healthy vs low stock ratio</CardDescription>
+              <CardTitle>Products that need action</CardTitle>
+              <CardDescription>Items already at or below their reorder point.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-[200px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {pieData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="mt-4 flex justify-center gap-6">
-                <div className="flex items-center gap-2">
-                  <div className="h-3 w-3 rounded-full bg-success" />
-                  <span className="text-sm text-muted-foreground">Well Stocked</span>
+              {productsToReorder.length === 0 ? (
+                <div className="rounded-lg border border-green-200 bg-green-50/40 p-4 text-sm text-green-900">
+                  All products are currently above reorder level.
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-3 w-3 rounded-full bg-destructive" />
-                  <span className="text-sm text-muted-foreground">Low Stock</span>
+              ) : (
+                <div className="space-y-3">
+                  {productsToReorder.slice(0, 5).map((product) => (
+                    <div key={product.id} className="flex items-center justify-between rounded-lg border p-4">
+                      <div>
+                        <p className="font-medium">{product.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Current stock: {product.stock} | Minimum needed: {product.min_stock}
+                        </p>
+                        {product.days_of_inventory !== null && product.days_of_inventory !== undefined && (
+                          <p className="text-xs text-muted-foreground">
+                            Stock will last {product.days_of_inventory.toFixed(1)} day(s)
+                          </p>
+                        )}
+                      </div>
+                      <Badge variant="destructive">Reorder</Badge>
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Quick Actions */}
-          <Card className="lg:col-span-2">
+          <Card>
             <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-              <CardDescription>Common tasks and shortcuts</CardDescription>
+              <CardTitle>Top profit contributors</CardTitle>
+              <CardDescription>The products adding the most profit.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Button asChild variant="outline" className="h-auto justify-start p-4">
-                  <Link to="/products/add">
-                    <Package className="mr-3 h-5 w-5 text-primary" />
-                    <div className="text-left">
-                      <div className="font-medium">Add Product</div>
-                      <div className="text-xs text-muted-foreground">
-                        Add new items to inventory
-                      </div>
-                    </div>
-                  </Link>
-                </Button>
+              {topProfitProducts.length === 0 ? (
+                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                  No sales recorded yet. Record sales to see which products are most profitable.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={topProfitProducts}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                        <YAxis tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+                        <Tooltip
+                          formatter={formatTooltipValue}
+                          contentStyle={{
+                            backgroundColor: 'hsl(var(--card))',
+                            border: '1px solid hsl(var(--border))',
+                            borderRadius: '8px',
+                          }}
+                        />
+                        <Bar dataKey="profit" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
 
-                <Button asChild variant="outline" className="h-auto justify-start p-4">
-                  <Link to="/sales/add">
-                    <ShoppingCart className="mr-3 h-5 w-5 text-primary" />
-                    <div className="text-left">
-                      <div className="font-medium">Record Sale</div>
-                      <div className="text-xs text-muted-foreground">
-                        Log a new sale transaction
+                  <div className="space-y-2">
+                    {topProfitProducts.map((product) => (
+                      <div key={product.product_id} className="flex items-center justify-between text-sm">
+                        <span className="truncate pr-3">{product.name}</span>
+                        <span className="font-medium">{formatIndianCurrency(product.profit)}</span>
                       </div>
-                    </div>
-                  </Link>
-                </Button>
-
-                <Button asChild variant="outline" className="h-auto justify-start p-4">
-                  <Link to="/reorder">
-                    <AlertTriangle className="mr-3 h-5 w-5 text-warning" />
-                    <div className="text-left">
-                      <div className="font-medium">Check Reorder</div>
-                      <div className="text-xs text-muted-foreground">
-                        View items needing restock
-                      </div>
-                    </div>
-                  </Link>
-                </Button>
-
-                <Button asChild variant="outline" className="h-auto justify-start p-4">
-                  <Link to="/products">
-                    <TrendingUp className="mr-3 h-5 w-5 text-success" />
-                    <div className="text-left">
-                      <div className="font-medium">View Inventory</div>
-                      <div className="text-xs text-muted-foreground">
-                        Browse all products
-                      </div>
-                    </div>
-                  </Link>
-                </Button>
-              </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

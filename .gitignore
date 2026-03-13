@@ -1,0 +1,115 @@
+# ============================================================
+# Root .gitignore — Inventory Management System
+# Covers: Python/FastAPI backend + React/Vite/TypeScript frontend
+# ============================================================
+
+# ── OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ── Editor / IDE ─────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints
+
+# ── Environment variables / secrets ──────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+
+# ── Node / Frontend ──────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Vite build output
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# TypeScript / build caches
+*.tsbuildinfo
+
+# ── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Database / local data ────────────────────────────────────
+*.db
+*.sqlite3
+*.sqlite
+
+# ── Miscellaneous ────────────────────────────────────────────
+# Byte-order mark files
+*.bom
+
+# Backup files
+*.bak
+*.orig
+*.rej
+
+# Patch files
+*.patch
+*.diff

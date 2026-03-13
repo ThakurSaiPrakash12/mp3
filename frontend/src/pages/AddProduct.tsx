@@ -1,11 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { productsApi } from '@/services/api';
+import { productsApi, Supplier, suppliersApi } from '@/services/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ArrowLeft, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -14,22 +21,45 @@ interface CreateProductForm {
   stock: number;
   min_stock: number;
   lead_time: number;
+  supplier_id: number | null;
+  cost_price: number | null;
+  selling_price: number | null;
 }
 
 export default function AddProduct() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingSuppliers, setIsLoadingSuppliers] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
   const [formData, setFormData] = useState<CreateProductForm>({
     name: '',
     stock: 0,
     min_stock: 0,
     lead_time: 1,
+    supplier_id: null,
+    cost_price: null,
+    selling_price: null,
   });
 
   const [errors, setErrors] = useState<Partial<Record<keyof CreateProductForm, string>>>({});
+
+  useEffect(() => {
+    const fetchSuppliers = async () => {
+      try {
+        const response = await suppliersApi.getAll();
+        setSuppliers(response.suppliers);
+      } catch (err) {
+        console.error('Suppliers fetch error:', err);
+      } finally {
+        setIsLoadingSuppliers(false);
+      }
+    };
+
+    void fetchSuppliers();
+  }, []);
 
   const validate = (): boolean => {
     const newErrors: Partial<Record<keyof CreateProductForm, string>> = {};
@@ -52,6 +82,14 @@ export default function AddProduct() {
       newErrors.lead_time = 'Lead time must be at least 1 day';
     }
 
+    if (formData.cost_price !== null && formData.cost_price < 0) {
+      newErrors.cost_price = 'Cost price cannot be negative';
+    }
+
+    if (formData.selling_price !== null && formData.selling_price < 0) {
+      newErrors.selling_price = 'Selling price cannot be negative';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -69,6 +107,9 @@ export default function AddProduct() {
       await productsApi.create({
         ...formData,
         name: formData.name.trim(),
+        supplier_id: formData.supplier_id,
+        cost_price: formData.cost_price,
+        selling_price: formData.selling_price,
       });
       setSuccess(true);
       setTimeout(() => navigate('/products'), 1500);
@@ -189,6 +230,57 @@ export default function AddProduct() {
                 <p className="text-xs text-muted-foreground">
                   Time required to restock this product
                 </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Supplier</Label>
+                <Select
+                  value={formData.supplier_id?.toString() || 'none'}
+                  onValueChange={(value) => handleChange('supplier_id', value === 'none' ? null : parseInt(value, 10))}
+                  disabled={isLoadingSuppliers}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select supplier (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No supplier</SelectItem>
+                    {suppliers.map((supplier) => (
+                      <SelectItem key={supplier.id} value={supplier.id.toString()}>
+                        {supplier.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="cost_price">Cost Price</Label>
+                  <Input
+                    id="cost_price"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.cost_price ?? ''}
+                    onChange={(e) => handleChange('cost_price', e.target.value === '' ? null : parseFloat(e.target.value))}
+                    className={errors.cost_price ? 'border-destructive' : ''}
+                  />
+                  {errors.cost_price && <p className="text-xs text-destructive">{errors.cost_price}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="selling_price">Selling Price</Label>
+                  <Input
+                    id="selling_price"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.selling_price ?? ''}
+                    onChange={(e) => handleChange('selling_price', e.target.value === '' ? null : parseFloat(e.target.value))}
+                    className={errors.selling_price ? 'border-destructive' : ''}
+                  />
+                  {errors.selling_price && <p className="text-xs text-destructive">{errors.selling_price}</p>}
+                </div>
               </div>
 
               <div className="flex gap-3 pt-4">

@@ -9,14 +9,22 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 
 interface WebSocketMessage {
   event: string;
-  data: any;
+  data: WebSocketEventData;
 }
 
+type WebSocketEventData = {
+  product_id?: number;
+  name?: string;
+  quantity?: number;
+  [key: string]: unknown;
+};
+
 interface UseWebSocketOptions {
-  onProductAdded?: (data: any) => void;
-  onSaleRecorded?: (data: any) => void;
-  onStockUpdated?: (data: any) => void;
-  onProductsImported?: (data: any) => void;
+  onProductAdded?: (data: WebSocketEventData) => void;
+  onSaleRecorded?: (data: WebSocketEventData) => void;
+  onStockUpdated?: (data: WebSocketEventData) => void;
+  onProductsImported?: (data: WebSocketEventData) => void;
+  onForecastUpdated?: (data: WebSocketEventData) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
   onError?: (error: Event) => void;
@@ -30,14 +38,27 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  const optionsRef = useRef(options);
+  const shouldReconnectRef = useRef(true);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
 
   const connect = useCallback(() => {
     // Don't create a new connection if one already exists
     if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    shouldReconnectRef.current = true;
 
     setConnectionStatus('connecting');
     
@@ -50,7 +71,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
         setIsConnected(true);
         setConnectionStatus('connected');
         reconnectAttemptsRef.current = 0;
-        options.onConnected?.();
+        optionsRef.current.onConnected?.();
       };
 
       ws.onmessage = (event) => {
@@ -64,16 +85,19 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
               console.log('🔗 Connected to inventory updates');
               break;
             case 'product_added':
-              options.onProductAdded?.(message.data);
+              optionsRef.current.onProductAdded?.(message.data);
               break;
             case 'sale_recorded':
-              options.onSaleRecorded?.(message.data);
+              optionsRef.current.onSaleRecorded?.(message.data);
               break;
             case 'stock_updated':
-              options.onStockUpdated?.(message.data);
+              optionsRef.current.onStockUpdated?.(message.data);
               break;
             case 'products_imported':
-              options.onProductsImported?.(message.data);
+              optionsRef.current.onProductsImported?.(message.data);
+              break;
+            case 'forecast_updated':
+              optionsRef.current.onForecastUpdated?.(message.data);
               break;
             case 'pong':
               // Heartbeat response
@@ -89,17 +113,17 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
       ws.onerror = (error) => {
         console.error('❌ WebSocket error:', error);
         setConnectionStatus('disconnected');
-        options.onError?.(error);
+        optionsRef.current.onError?.(error);
       };
 
       ws.onclose = () => {
         console.log('🔌 WebSocket disconnected');
         setIsConnected(false);
         setConnectionStatus('disconnected');
-        options.onDisconnected?.();
+        optionsRef.current.onDisconnected?.();
         
         // Attempt to reconnect if we haven't exceeded max attempts
-        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        if (shouldReconnectRef.current && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current += 1;
           console.log(`🔄 Reconnecting... (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
           
@@ -114,15 +138,18 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
       console.error('Failed to create WebSocket connection:', error);
       setConnectionStatus('disconnected');
     }
-  }, [options]);
+  }, []);
 
   const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
     
     if (wsRef.current) {
+      wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -131,7 +158,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
     setConnectionStatus('disconnected');
   }, []);
 
-  const send = useCallback((message: any) => {
+  const send = useCallback((message: unknown) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(typeof message === 'string' ? message : JSON.stringify(message));
     } else {
@@ -152,6 +179,7 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
 
   // Auto-connect on mount, disconnect on unmount
   useEffect(() => {
+    shouldReconnectRef.current = true;
     connect();
 
     return () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Sale, Product, PaginationInfo, salesApi, productsApi } from '@/services/api';
 import { useAuth } from '@/auth/AuthProvider';
@@ -58,24 +58,16 @@ export default function Sales() {
     onStockUpdated: () => fetchSales(),
   });
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  useEffect(() => {
-    fetchSales();
-  }, [currentPage, selectedProduct, startDate, endDate]);
-
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     try {
       const response = await productsApi.getAll(1, 100);
       setProducts(response.products);
     } catch (err) {
       console.error('Products fetch error:', err);
     }
-  };
+  }, []);
 
-  const fetchSales = async () => {
+  const fetchSales = useCallback(async () => {
     setIsLoading(true);
     setError('');
     
@@ -95,7 +87,15 @@ export default function Sales() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, selectedProduct, startDate, endDate]);
+
+  useEffect(() => {
+    void fetchProducts();
+  }, [fetchProducts]);
+
+  useEffect(() => {
+    void fetchSales();
+  }, [fetchSales]);
 
   const clearFilters = () => {
     setSelectedProduct('');

@@ -1,49 +1,54 @@
-# Python
+# ── Python ───────────────────────────────────────────────────
 *.py[cod]
 *$py.class
 *.so
+*.pyo
+*.pyd
 .Python
+
+# Byte-compiled / cache
 __pycache__/
 *.egg-info/
+
+# Distribution
 dist/
 build/
 
-# Virtual Environment
+# ── Virtual environment ───────────────────────────────────────
 venv/
 env/
 ENV/
-.venv
+.venv/
 
-# IDE
+# ── Environment / secrets ─────────────────────────────────────
+# IMPORTANT: .env holds DB credentials — never commit it.
+.env
+.env.*
+!.env.example
+
+# ── IDE ───────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Database
-*.db
-*.sqlite3
-
-# Environment Variables
-.env
-.env.local
-
-# OS
+# ── OS ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Logs
+# ── Logs ──────────────────────────────────────────────────────
 *.log
 
-# Testing
+# ── Testing ───────────────────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Flask
-instance/
-.webassets-cache
+# ── Type checking ─────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
 
-# Personal/Sensitive
-config.py
+# ── Database files ────────────────────────────────────────────
+*.db
+*.sqlite3
