@@ -19,6 +19,55 @@ This README explains the project from setup to runtime behavior, including all f
 - Recharts
 - Tailwind + UI components
 
+## Docker Quick Start
+
+This repository includes container definitions for:
+
+- PostgreSQL (`db`)
+- FastAPI backend (`backend`)
+- React frontend served by Nginx (`frontend`)
+
+### 1) Create environment file
+
+Copy `.env.example` to `.env` in the project root and update values if needed.
+
+### 2) Build and start all containers
+
+```bash
+docker compose up --build -d
+```
+
+### 3) Verify services
+
+```bash
+docker compose ps
+```
+
+Open:
+
+- Frontend: `http://localhost:5173`
+- Backend API docs: `http://localhost:5000/docs`
+
+### 4) View logs
+
+```bash
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f db
+```
+
+### 5) Stop services
+
+```bash
+docker compose down
+```
+
+To also remove database volume data:
+
+```bash
+docker compose down -v
+```
+
 ## 2) Runtime Architecture
 
 1. Frontend calls REST APIs hosted by FastAPI (default `http://127.0.0.1:5000`).
