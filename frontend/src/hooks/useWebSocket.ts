@@ -30,7 +30,12 @@ interface UseWebSocketOptions {
   onError?: (error: Event) => void;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const defaultApiBaseUrl =
+  typeof window !== 'undefined'
+    ? `${window.location.protocol}//${window.location.hostname}:5000`
+    : 'http://localhost:5000';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl;
 const derivedWsBase = API_BASE_URL.replace(/^http/i, 'ws').replace(/\/$/, '');
 const WS_URL = import.meta.env.VITE_WS_URL || `${derivedWsBase}/ws`;
 const RECONNECT_DELAY = 3000; // 3 seconds
