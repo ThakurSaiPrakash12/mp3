@@ -9,6 +9,19 @@ from websocket_manager import broadcast_event
 from utils.api_helpers import get_product_reorder_info, get_products_reorder_info_bulk
 from database import get_db_connection
 from typing import Optional
+import time
+
+
+_REORDER_CACHE_TTL_SECONDS = 120
+_reorder_cache = {
+    "ts": 0.0,
+    "data": [],
+}
+
+
+def invalidate_reorder_cache() -> None:
+    _reorder_cache["ts"] = 0.0
+    _reorder_cache["data"] = []
 
 
 async def create_product(
@@ -34,6 +47,7 @@ async def create_product(
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     product_id = repo.insert_product(name, stock, min_stock, lead_time, supplier_id, cost_price, selling_price)
+    invalidate_reorder_cache()
 
     log_audit(
         action="INSERT_PRODUCT",
@@ -104,8 +118,14 @@ def get_products_page(page: int, limit: int, search: str) -> dict:
 
 def get_all_products_reorder_data() -> list[dict]:
     """Return all products with reorder fields in one bulk computation."""
+    now = time.time()
+    if _reorder_cache["data"] and (now - _reorder_cache["ts"]) < _REORDER_CACHE_TTL_SECONDS:
+        return _reorder_cache["data"]
+
     rows = repo.get_all_products_basic()
     if not rows:
+        _reorder_cache["ts"] = now
+        _reorder_cache["data"] = []
         return []
 
     conn = get_db_connection()
@@ -145,6 +165,8 @@ def get_all_products_reorder_data() -> list[dict]:
             }
         )
 
+    _reorder_cache["ts"] = now
+    _reorder_cache["data"] = payload
     return payload
 
 
@@ -153,6 +175,7 @@ async def replenish_stock(product_id: int, quantity: int, client_host: str) -> d
     result = repo.add_stock(product_id, quantity)
     if result is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    invalidate_reorder_cache()
 
     log_audit(
         action="REORDER_RESET",

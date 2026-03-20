@@ -11,6 +11,7 @@ from services.product_service import (
     create_product,
     get_products_page,
     get_all_products_reorder_data,
+    invalidate_reorder_cache,
     replenish_stock,
     get_reorder_check,
 )
@@ -104,4 +105,6 @@ async def upload_csv(
     mode: str = Query("skip", pattern="^(skip|update_stock)$"),
     current_user: Dict = Depends(get_admin_user),
 ):
-    return await upload_csv_handler(file, mode)
+    result = await upload_csv_handler(file, mode)
+    invalidate_reorder_cache()
+    return result

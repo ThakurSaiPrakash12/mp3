@@ -7,6 +7,7 @@ from audit import log_audit
 from psycopg2.extras import execute_values
 import csv
 import io
+import hashlib
 
 async def upload_csv_handler(
     file: UploadFile,
@@ -24,6 +25,40 @@ async def upload_csv_handler(
     try:
         # Read file content
         contents = await file.read()
+        csv_checksum = hashlib.sha256(contents).hexdigest()
+
+        # Skip if the same CSV file content was already uploaded earlier.
+        # details is stored as JSON text in audit_log, so we can match checksum via LIKE.
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT 1
+                FROM audit_log
+                WHERE action = 'BULK_UPLOAD_PRODUCTS'
+                  AND details LIKE %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (f'%"csv_checksum": "{csv_checksum}"%',),
+            )
+            already_uploaded = cur.fetchone() is not None
+        finally:
+            cur.close()
+            conn.close()
+
+        if already_uploaded:
+            return {
+                "message": "Same CSV file was already uploaded earlier. Skipped.",
+                "inserted": 0,
+                "skipped": 0,
+                "updated": 0,
+                "failed": 0,
+                "errors": [],
+                "skipped_file": True,
+            }
+
         stream = io.StringIO(contents.decode("utf-8-sig"), newline=None)
         csv_reader = csv.DictReader(stream)
 
@@ -225,7 +260,9 @@ async def upload_csv_handler(
                 "skipped": skipped_count,
                 "updated": updated_count,
                 "failed": failed_count,
-                "mode": mode
+                "mode": mode,
+                "csv_checksum": csv_checksum,
+                "filename": file.filename,
             },
             ip_address="127.0.0.1"  # Default for CSV upload
         )

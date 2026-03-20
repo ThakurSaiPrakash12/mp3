@@ -10,13 +10,24 @@ from utils.api_helpers import get_products_reorder_info_bulk
 from repositories.product_repository import get_all_products_basic
 from database import get_db_connection
 from datetime import datetime, timedelta
+import time
 
 router = APIRouter()
+
+_DASHBOARD_CACHE_TTL_SECONDS = 60
+_dashboard_cache = {
+    "ts": 0.0,
+    "payload": None,
+}
 
 
 @router.get("/dashboard", tags=["Dashboard"])
 async def dashboard(current_user: Dict = Depends(get_current_user)):
     """Get dashboard statistics and recent sales data."""
+    now = time.time()
+    if _dashboard_cache["payload"] and (now - _dashboard_cache["ts"]) < _DASHBOARD_CACHE_TTL_SECONDS:
+        return _dashboard_cache["payload"]
+
     products = get_all_products_basic()
 
     conn = get_db_connection()
@@ -63,7 +74,7 @@ async def dashboard(current_user: Dict = Depends(get_current_user)):
     sales_trend = get_sales_trend_data()
     total_sales = get_total_sales_7d()
 
-    return {
+    payload = {
         "summary": {
             "total_products": len(products),
             "total_sales_last_7_days": total_sales,
@@ -88,3 +99,7 @@ async def dashboard(current_user: Dict = Depends(get_current_user)):
             "message": "Reorder recommended" if reorder_required_count > 0 else "No reorder needed",
         },
     }
+
+    _dashboard_cache["ts"] = now
+    _dashboard_cache["payload"] = payload
+    return payload

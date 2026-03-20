@@ -31,6 +31,7 @@ interface CsvUploadDialogProps {
 export function CsvUploadDialog({ open, onOpenChange, onSuccess }: CsvUploadDialogProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [duplicateMode, setDuplicateMode] = useState<'skip' | 'update_stock'>('skip');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -44,13 +45,15 @@ export function CsvUploadDialog({ open, onOpenChange, onSuccess }: CsvUploadDial
     if (!selectedFile) { toast.error('Please select a file first'); return; }
     setIsUploading(true);
     try {
-      const result = await productsApi.uploadCSV(selectedFile);
+      const result = await productsApi.uploadCSV(selectedFile, duplicateMode);
+      if (result.message) toast.info(result.message);
       if (result.inserted > 0) toast.success(`Successfully uploaded ${result.inserted} product(s)`);
       if (result.skipped > 0) toast.info(`Skipped ${result.skipped} duplicate product(s)`);
       if (result.updated > 0) toast.success(`Updated ${result.updated} existing product(s)`);
       result.errors?.forEach((e: { row: number; error: string }) => toast.error(`Row ${e.row}: ${e.error}`));
       onOpenChange(false);
       setSelectedFile(null);
+      setDuplicateMode('skip');
       onSuccess();
     } catch (err: unknown) {
       toast.error(getErrorMessage(err, 'Failed to upload CSV file'));
@@ -73,10 +76,26 @@ export function CsvUploadDialog({ open, onOpenChange, onSuccess }: CsvUploadDial
             type="file" accept=".csv" onChange={handleFileChange} disabled={isUploading}
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 file:cursor-pointer cursor-pointer"
           />
+          <div className="space-y-2">
+            <Label htmlFor="duplicate-mode">If duplicate product name exists</Label>
+            <select
+              id="duplicate-mode"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={duplicateMode}
+              onChange={(e) => setDuplicateMode(e.target.value as 'skip' | 'update_stock')}
+              disabled={isUploading}
+            >
+              <option value="skip">Skip duplicate rows</option>
+              <option value="update_stock">Add quantity to existing stock</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              "Add quantity" increases current stock by CSV stock value for matching names.
+            </p>
+          </div>
           {selectedFile && <div className="text-sm text-muted-foreground">Selected: {selectedFile.name}</div>}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => { onOpenChange(false); setSelectedFile(null); }} disabled={isUploading}>
+          <Button variant="outline" onClick={() => { onOpenChange(false); setSelectedFile(null); setDuplicateMode('skip'); }} disabled={isUploading}>
             Cancel
           </Button>
           <Button onClick={handleUpload} disabled={!selectedFile || isUploading}>
