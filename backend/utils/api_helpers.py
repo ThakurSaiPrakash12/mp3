@@ -28,11 +28,12 @@ def get_product_reorder_info(cur, product_id: int, stock: int, min_stock: int, l
     cur.execute("""
         SELECT
             COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE THEN quantity ELSE 0 END), 0) AS sales_today,
-            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - INTERVAL '1 day' THEN quantity ELSE 0 END), 0) AS sales_yesterday,
-            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - INTERVAL '2 days' THEN quantity ELSE 0 END), 0) AS sales_two_days_ago,
-            COALESCE(SUM(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '7 days' THEN quantity ELSE 0 END), 0) AS sales_7d
+            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - 1 THEN quantity ELSE 0 END), 0) AS sales_yesterday,
+            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - 2 THEN quantity ELSE 0 END), 0) AS sales_two_days_ago,
+            COALESCE(SUM(quantity), 0) AS sales_7d
         FROM sales
         WHERE product_id = %s
+          AND sale_date >= CURRENT_DATE - 7
     """, (product_id,))
     sales_today, sales_yesterday, sales_two_days_ago, sales_7d = cur.fetchone()
     avg_sales_7d = sales_7d / 7
@@ -72,11 +73,12 @@ def get_products_reorder_info_bulk(cur, products: list[tuple]) -> dict[int, dict
         SELECT
             product_id,
             COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE THEN quantity ELSE 0 END), 0) AS sales_today,
-            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - INTERVAL '1 day' THEN quantity ELSE 0 END), 0) AS sales_yesterday,
-            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - INTERVAL '2 days' THEN quantity ELSE 0 END), 0) AS sales_two_days_ago,
-            COALESCE(SUM(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '7 days' THEN quantity ELSE 0 END), 0) AS sales_7d
+            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - 1 THEN quantity ELSE 0 END), 0) AS sales_yesterday,
+            COALESCE(SUM(CASE WHEN sale_date = CURRENT_DATE - 2 THEN quantity ELSE 0 END), 0) AS sales_two_days_ago,
+            COALESCE(SUM(quantity), 0) AS sales_7d
         FROM sales
         WHERE product_id = ANY(%s)
+          AND sale_date >= CURRENT_DATE - 7
         GROUP BY product_id
         """,
         (product_ids,),
