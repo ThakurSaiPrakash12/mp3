@@ -6,7 +6,6 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { API_BASE_URL } from '@/services/apiClient';
 
 interface WebSocketMessage {
   event: string;
@@ -31,23 +30,11 @@ interface UseWebSocketOptions {
   onError?: (error: Event) => void;
 }
 
-const buildWsUrl = (): string => {
-  const explicitWsUrl = import.meta.env.VITE_WS_URL;
-  if (explicitWsUrl) return explicitWsUrl;
-
-  if (/^https?:\/\//i.test(API_BASE_URL)) {
-    return `${API_BASE_URL.replace(/^http/i, 'ws').replace(/\/api\/?$/, '')}/ws`;
-  }
-
-  if (typeof window !== 'undefined') {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${wsProtocol}//${window.location.host}/api/ws`;
-  }
-
-  return 'ws://localhost:5000/ws';
-};
-
-const WS_URL = buildWsUrl();
+const defaultWsUrl =
+  typeof window !== 'undefined'
+    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+    : 'ws://localhost:5000/ws';
+const WS_URL = import.meta.env.VITE_WS_URL || defaultWsUrl;
 const RECONNECT_DELAY = 3000; // 3 seconds
 const MAX_RECONNECT_ATTEMPTS = 5;
 
