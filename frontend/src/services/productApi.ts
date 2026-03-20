@@ -73,7 +73,16 @@ export const productsApi = {
     });
 
     if (!response.ok) {
-      const error: ApiError = { message: response.statusText || 'Upload failed', status: response.status };
+      let message = response.statusText || 'Upload failed';
+      try {
+        const json = await response.json();
+        if (json?.detail) {
+          message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+        }
+      } catch {
+        // ignore parse errors
+      }
+      const error: ApiError = { message, status: response.status };
       throw error;
     }
 

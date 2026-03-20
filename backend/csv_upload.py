@@ -23,15 +23,22 @@ async def upload_csv_handler(
     try:
         # Read file content
         contents = await file.read()
-        stream = io.StringIO(contents.decode("UTF-8"), newline=None)
+        stream = io.StringIO(contents.decode("utf-8-sig"), newline=None)
         csv_reader = csv.DictReader(stream)
-        
-        # Validate CSV headers
+
+        # Validate CSV headers (allow extra columns; require expected ones)
         expected_headers = {'name', 'stock', 'min_stock', 'lead_time'}
-        if not csv_reader.fieldnames or set(csv_reader.fieldnames) != expected_headers:
+        normalized_headers = {
+            (header or '').strip().lstrip('\ufeff')
+            for header in (csv_reader.fieldnames or [])
+        }
+        if not csv_reader.fieldnames or not expected_headers.issubset(normalized_headers):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid CSV format. Expected headers: name,stock,min_stock,lead_time"
+                detail=(
+                    "Invalid CSV format. Required headers: name,stock,min_stock,lead_time. "
+                    f"Found headers: {','.join(sorted(normalized_headers)) or 'none'}"
+                )
             )
         
         # Lists to store valid rows, errors, and tracking
@@ -47,8 +54,13 @@ async def upload_csv_handler(
             error_msg = None
             
             try:
+                normalized_row = {
+                    (key or '').strip().lstrip('\ufeff'): (value or '').strip()
+                    for key, value in row.items()
+                }
+
                 # Validate name
-                name = row.get('name', '').strip()
+                name = normalized_row.get('name', '')
                 if not name:
                     error_msg = "Product name is required and cannot be empty"
                     errors.append({"row": row_number, "error": error_msg})
@@ -56,7 +68,7 @@ async def upload_csv_handler(
                 
                 # Validate stock
                 try:
-                    stock = int(row.get('stock', ''))
+                    stock = int(normalized_row.get('stock', ''))
                     if stock < 0:
                         error_msg = "Stock cannot be negative"
                         errors.append({"row": row_number, "error": error_msg})
@@ -68,7 +80,7 @@ async def upload_csv_handler(
                 
                 # Validate min_stock
                 try:
-                    min_stock = int(row.get('min_stock', ''))
+                    min_stock = int(normalized_row.get('min_stock', ''))
                     if min_stock < 0:
                         error_msg = "Minimum stock cannot be negative"
                         errors.append({"row": row_number, "error": error_msg})
@@ -80,7 +92,7 @@ async def upload_csv_handler(
                 
                 # Validate lead_time
                 try:
-                    lead_time = int(row.get('lead_time', ''))
+                    lead_time = int(normalized_row.get('lead_time', ''))
                     if lead_time <= 0:
                         error_msg = "Lead time must be greater than 0"
                         errors.append({"row": row_number, "error": error_msg})

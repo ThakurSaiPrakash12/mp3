@@ -94,6 +94,7 @@ async def reorder_reset(
 @router.post("/products/upload-csv", tags=["Products"])
 async def upload_csv(
     file: UploadFile = File(...),
+    mode: str = Query("skip", pattern="^(skip|update_stock)$"),
     current_user: Dict = Depends(get_admin_user),
 ):
-    return await upload_csv_handler(file)
+    return await upload_csv_handler(file, mode)
