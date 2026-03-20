@@ -36,6 +36,10 @@ export interface ProductsResponse {
   pagination: PaginationInfo;
 }
 
+export interface ReorderProductsResponse {
+  products: Product[];
+}
+
 export interface CreateProductRequest {
   name: string;
   stock: number;
@@ -88,4 +92,6 @@ export const productsApi = {
 
     return response.json();
   },
+
+  getReorderData: () => apiRequest<ReorderProductsResponse>('/products/reorder-data'),
 };

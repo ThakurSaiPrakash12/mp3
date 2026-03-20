@@ -22,7 +22,6 @@ interface ProductReorderInfo {
 export default function ReorderStatus() {
   const [productData, setProductData] = useState<ProductReorderInfo[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
-  const PAGE_SIZE = 100;
   const VIRTUALIZATION_THRESHOLD = 120;
   const VIRTUAL_LIST_MAX_HEIGHT = 620;
   const VIRTUAL_ROW_HEIGHT = 190;
@@ -35,21 +34,8 @@ export default function ReorderStatus() {
     setIsLoadingProducts(true);
     
     try {
-      const firstPage = await productsApi.getAll(1, PAGE_SIZE);
-
-      const allProducts: Product[] = [...firstPage.products];
-
-      if (firstPage.pagination.pages > 1) {
-        const remainingRequests = [];
-        for (let page = 2; page <= firstPage.pagination.pages; page += 1) {
-          remainingRequests.push(productsApi.getAll(page, PAGE_SIZE));
-        }
-
-        const remainingPages = await Promise.all(remainingRequests);
-        for (const pageData of remainingPages) {
-          allProducts.push(...pageData.products);
-        }
-      }
+      const response = await productsApi.getReorderData();
+      const allProducts: Product[] = response.products;
 
       const finalData: ProductReorderInfo[] = allProducts.map((product) => ({
         product,

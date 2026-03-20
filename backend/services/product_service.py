@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from repositories import product_repository as repo
 from audit import log_audit
 from websocket_manager import broadcast_event
-from utils.api_helpers import get_product_reorder_info
+from utils.api_helpers import get_product_reorder_info, get_products_reorder_info_bulk
 from database import get_db_connection
 from typing import Optional
 
@@ -61,10 +61,27 @@ def get_products_page(page: int, limit: int, search: str) -> dict:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        reorder_map = get_products_reorder_info_bulk(
+            cur,
+            [(r[0], r[2], r[3], r[4]) for r in rows],
+        )
+
         products = []
         for (product_id, name, stock, min_stock, lead_time, supplier_id,
              cost_price, selling_price, created, updated) in rows:
-            reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
+            reorder_info = reorder_map.get(
+                product_id,
+                {
+                    "status": "OK",
+                    "reorder_required": False,
+                    "reorder_level": min_stock,
+                    "forecast_daily": 0,
+                    "safety_stock": 0,
+                    "reorder_point": min_stock,
+                    "days_of_inventory": None,
+                    "average_daily_sales": 0,
+                },
+            )
             products.append({
                 "id": product_id, "name": name, "stock": stock,
                 "min_stock": min_stock, "lead_time": lead_time,
@@ -83,6 +100,52 @@ def get_products_page(page: int, limit: int, search: str) -> dict:
         "products": products,
         "pagination": {"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) // limit},
     }
+
+
+def get_all_products_reorder_data() -> list[dict]:
+    """Return all products with reorder fields in one bulk computation."""
+    rows = repo.get_all_products_basic()
+    if not rows:
+        return []
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        reorder_map = get_products_reorder_info_bulk(
+            cur,
+            [(r[0], r[2], r[3], r[4]) for r in rows],
+        )
+    finally:
+        cur.close()
+        conn.close()
+
+    payload = []
+    for product_id, name, stock, min_stock, lead_time in rows:
+        reorder_info = reorder_map.get(
+            product_id,
+            {
+                "status": "OK",
+                "reorder_required": False,
+                "reorder_level": min_stock,
+                "forecast_daily": 0,
+                "safety_stock": 0,
+                "reorder_point": min_stock,
+                "days_of_inventory": None,
+                "average_daily_sales": 0,
+            },
+        )
+        payload.append(
+            {
+                "id": product_id,
+                "name": name,
+                "stock": stock,
+                "min_stock": min_stock,
+                "lead_time": lead_time,
+                **reorder_info,
+            }
+        )
+
+    return payload
 
 
 async def replenish_stock(product_id: int, quantity: int, client_host: str) -> dict:

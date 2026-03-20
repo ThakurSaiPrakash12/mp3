@@ -10,6 +10,7 @@ from auth import get_current_user, get_admin_user
 from services.product_service import (
     create_product,
     get_products_page,
+    get_all_products_reorder_data,
     replenish_stock,
     get_reorder_check,
 )
@@ -56,6 +57,12 @@ async def get_products(
 ):
     validate_pagination(page, limit)
     return get_products_page(page, limit, search or "")
+
+
+@router.get("/products/reorder-data", tags=["Products"])
+async def get_products_reorder_data(current_user: Dict = Depends(get_current_user)):
+    """Fast bulk endpoint for reorder screen, avoids paginated page-by-page fetch."""
+    return {"products": get_all_products_reorder_data()}
 
 
 @router.post("/products", tags=["Products"], status_code=status.HTTP_201_CREATED)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from typing import Dict
 from auth import get_current_user
 from services.sales_service import get_sales_trend_data, get_total_sales_7d
-from utils.api_helpers import get_product_reorder_info
+from utils.api_helpers import get_products_reorder_info_bulk
 from repositories.product_repository import get_all_products_basic
 from database import get_db_connection
 from datetime import datetime, timedelta
@@ -22,12 +22,26 @@ async def dashboard(current_user: Dict = Depends(get_current_user)):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        reorder_map = get_products_reorder_info_bulk(
+            cur,
+            [(p[0], p[2], p[3], p[4]) for p in products],
+        )
+
         low_stock_count = reorder_required_count = 0
         stock_levels = []
         reorder_attention = []
 
         for product_id, name, stock, min_stock, lead_time in products:
-            reorder_info = get_product_reorder_info(cur, product_id, stock, min_stock, lead_time)
+            reorder_info = reorder_map.get(
+                product_id,
+                {
+                    "reorder_required": False,
+                    "forecast_daily": 0,
+                    "safety_stock": 0,
+                    "reorder_point": min_stock,
+                    "days_of_inventory": None,
+                },
+            )
             low_stock_count += stock < min_stock
             reorder_required_count += reorder_info["reorder_required"]
             entry = {
