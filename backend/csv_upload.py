@@ -4,6 +4,7 @@ CSV Upload endpoint for bulk product uploads
 from fastapi import HTTPException, UploadFile, Query
 from database import get_db_connection
 from audit import log_audit
+from psycopg2.extras import execute_values
 import csv
 import io
 
@@ -44,8 +45,6 @@ async def upload_csv_handler(
         # Lists to store valid rows, errors, and tracking
         valid_products = []
         errors = []
-        skipped_products = []
-        updated_products = []
         row_number = 1  # Start from 1 (header is 0)
         
         # Validate each row
@@ -114,6 +113,19 @@ async def upload_csv_handler(
                 errors.append({"row": row_number, "error": f"Unexpected error: {str(e)}"})
                 continue
         
+        # Merge duplicate names inside CSV (case-insensitive) to reduce DB work.
+        merged_products = {}
+        for product in valid_products:
+            key = product["name"].strip().lower()
+            if key in merged_products:
+                merged_products[key]["stock"] += product["stock"]
+                merged_products[key]["min_stock"] = product["min_stock"]
+                merged_products[key]["lead_time"] = product["lead_time"]
+            else:
+                merged_products[key] = dict(product)
+
+        valid_products = list(merged_products.values())
+
         # Calculate totals
         total_rows = row_number - 1  # Exclude header row
         failed_count = len(errors)
@@ -127,70 +139,65 @@ async def upload_csv_handler(
             cur = conn.cursor()
             
             try:
+                lower_names = [product["name"].strip().lower() for product in valid_products]
+
+                cur.execute(
+                    """
+                    SELECT id, LOWER(name) AS name_key
+                    FROM products
+                    WHERE LOWER(name) = ANY(%s)
+                    """,
+                    (lower_names,),
+                )
+                existing_rows = cur.fetchall()
+                existing_by_key = {row[1]: row[0] for row in existing_rows}
+
+                insert_rows = []
+                update_rows = []
+
                 for product in valid_products:
-                    name = product['name']
-                    stock = product['stock']
-                    min_stock = product['min_stock']
-                    lead_time = product['lead_time']
-                    
-                    # Check if product exists (case-insensitive)
-                    cur.execute(
-                        "SELECT id, stock, min_stock, lead_time FROM products WHERE LOWER(name) = LOWER(%s)",
-                        (name,)
-                    )
-                    existing = cur.fetchone()
-                    
-                    if existing:
-                        if mode == 'skip':
-                            # Skip duplicate
-                            skipped_products.append(name)
-                            skipped_count += 1
-                            
-                            # Log audit
-                            log_audit(
-                                action="DUPLICATE_SKIPPED",
-                                table_name="products",
-                                record_id=existing[0],
-                                details={"name": name},
-                                ip_address="127.0.0.1"  # Default for CSV upload
-                            )
-                        elif mode == 'update_stock':
-                            # Update existing product
-                            product_id = existing[0]
-                            previous_stock = existing[1]
-                            new_stock = previous_stock + stock
-                            
-                            cur.execute(
-                                """UPDATE products 
-                                   SET stock = %s, min_stock = %s, lead_time = %s, updated_at = CURRENT_TIMESTAMP
-                                   WHERE id = %s""",
-                                (new_stock, min_stock, lead_time, product_id)
-                            )
-                            updated_products.append(name)
-                            updated_count += 1
-                            
-                            # Log audit
-                            log_audit(
-                                action="DUPLICATE_UPDATED",
-                                table_name="products",
-                                record_id=product_id,
-                                details={
-                                    "name": name,
-                                    "previous_stock": previous_stock,
-                                    "new_stock": new_stock,
-                                    "min_stock": min_stock,
-                                    "lead_time": lead_time
-                                },
-                                ip_address="127.0.0.1"  # Default for CSV upload
-                            )
-                    else:
-                        # Insert new product
-                        cur.execute(
-                            """INSERT INTO products (name, stock, min_stock, lead_time)
-                               VALUES (%s, %s, %s, %s)""",
-                            (name, stock, min_stock, lead_time)
+                    key = product["name"].strip().lower()
+                    existing_id = existing_by_key.get(key)
+
+                    if existing_id is None:
+                        insert_rows.append(
+                            (product["name"], product["stock"], product["min_stock"], product["lead_time"])
                         )
-                        inserted_count += 1
+                    elif mode == "update_stock":
+                        update_rows.append(
+                            (existing_id, product["stock"], product["min_stock"], product["lead_time"])
+                        )
+                    else:
+                        skipped_count += 1
+
+                if insert_rows:
+                    execute_values(
+                        cur,
+                        """
+                        INSERT INTO products (name, stock, min_stock, lead_time)
+                        VALUES %s
+                        """,
+                        insert_rows,
+                        page_size=1000,
+                    )
+                    inserted_count = len(insert_rows)
+
+                if update_rows:
+                    execute_values(
+                        cur,
+                        """
+                        UPDATE products AS p
+                        SET stock = p.stock + v.stock,
+                            min_stock = v.min_stock,
+                            lead_time = v.lead_time,
+                            updated_at = CURRENT_TIMESTAMP
+                        FROM (VALUES %s) AS v(id, stock, min_stock, lead_time)
+                        WHERE p.id = v.id
+                        """,
+                        update_rows,
+                        page_size=1000,
+                    )
+                    updated_count = len(update_rows)
                 
                 conn.commit()
                 
